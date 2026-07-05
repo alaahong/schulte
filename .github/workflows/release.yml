@@ -1,9 +1,15 @@
 # 跨平台构建 + 自动发布
-# 触发:push tag v* / 手动触发
+# 触发:push tag v* / 手动 workflow_dispatch
+# 流程:
+#   1. 4 个独立构建 job 并行:macOS-arm64 / macOS-x64 / Windows / Linux
+#   2. mobile 2 个独立 job:Android / iOS
+#   3. tauri-action 在每个 job 内把产物上传到当前 tag 对应的 GitHub Release(草稿)
 # 产物:
-#   - 桌面:Windows .msi/.exe / macOS .dmg / Linux .deb/.AppImage
-#   - Android:.apk
-#   - iOS:.app / .ipa(需 macOS + Apple Developer 签名)
+#   - macOS: .dmg / .app(universal-apple-darwin)
+#   - Windows: .msi / .exe (NSIS)
+#   - Linux: .deb / .AppImage
+#   - Android: .apk (debug-signed)
+#   - iOS: .app(无签名,需自行签名)
 name: Release Build
 
 on:
@@ -12,33 +18,30 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
-      tag:
-        description: '可选:要构建的 tag(留空则用当前 commit)'
-        required: false
-        default: ''
+      prerelease:
+        description: '标记为 prerelease(预发布)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
-jobs:
-  # ============== 桌面(Windows + macOS + Linux)================
-  desktop:
-    name: Desktop (${{ matrix.platform }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            target: universal-apple-darwin
-            args: '--target universal-apple-darwin'
-          - platform: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            args: ''
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
-            args: ''
+# 同一 ref 不并发跑,避免 tauri-action 多次创建 release
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
-    runs-on: ${{ matrix.platform }}
+# 公共:在 tag 模式时,把 ref_name 作为发布 tag;workflow_dispatch 时退回到 run_id
+# 所有 job 共享:tagName, releaseName, releaseBody
+# 由 env 文件下发到下游 step(避免重复表达式)
+
+jobs:
+  # ============================================================
+  # Linux 桌面(deb + AppImage)
+  # ============================================================
+  linux:
+    name: Linux (.deb / .AppImage)
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -49,28 +52,27 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      # Linux 桌面需要若干系统库
       - name: Install Linux deps
-        if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
             librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev \
             patchelf \
             build-essential \
             curl \
             wget \
             file \
             libssl-dev \
-            libgtk-3-dev
+            zip \
+            unzip
 
-      # Rust 工具链 + 缓存
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -79,40 +81,168 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: cargo-${{ matrix.platform }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ matrix.platform }}-${{ matrix.target }}-
+          key: cargo-linux-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-linux-
 
       - name: Install JS deps
         run: npm ci
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v0-manual-{0}', github.run_id) }}
-          releaseName: ${{ github.ref_type == 'tag' && format('Schulte {0}', github.ref_name) || format('Schulte Manual {0}', github.run_id) }}
-          releaseBody: 'See assets below for Windows / macOS / Linux binaries.'
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+      - name: Generate Tauri icons
+        run: npm run icons:tauri
 
-      - name: Upload artifacts
-        if: success()
+      - name: Build & publish release (Linux)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.run_id) }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Schulte v{0}', github.ref_name) || format('Schulte Manual Build {0}', github.run_id) }}
+          releaseBody: |
+            Cross-platform build of Schulte Grid (attention training app).
+            跨平台舒尔特方格注意力训练应用。
+
+            - ✅ Linux: deb + AppImage (this build)
+            - ⏳ Windows / macOS / Android / iOS in parallel jobs
+          releaseDraft: true
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+
+      - name: Upload artifact (workflow)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: schulte-desktop-${{ matrix.platform }}
+          name: schulte-linux
           path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: ignore
 
-  # ============== Android ================
+  # ============================================================
+  # Windows 桌面(msi + nsis .exe)
+  # ============================================================
+  windows:
+    name: Windows (.msi / .exe)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-windows-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-windows-
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Generate Tauri icons
+        run: npm run icons:tauri
+
+      - name: Build & publish release (Windows)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.run_id) }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Schulte v{0}', github.ref_name) || format('Schulte Manual Build {0}', github.run_id) }}
+          releaseBody: |
+            Cross-platform build of Schulte Grid (attention training app).
+            跨平台舒尔特方格注意力训练应用。
+          releaseDraft: true
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+
+      - name: Upload artifact (workflow)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-windows
+          path: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: ignore
+
+  # ============================================================
+  # macOS(universal: arm64 + x64 → 一个 .dmg)
+  # ============================================================
+  macos:
+    name: macOS (.dmg universal)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-macos-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-macos-
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Generate Tauri icons
+        run: npm run icons:tauri
+
+      # universal build 合并 arm64+x64
+      - name: Build & publish release (macOS)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.run_id) }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Schulte v{0}', github.ref_name) || format('Schulte Manual Build {0}', github.run_id) }}
+          releaseBody: |
+            Cross-platform build of Schulte Grid (attention training app).
+            跨平台舒尔特方格注意力训练应用。
+          releaseDraft: true
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          args: --target universal-apple-darwin
+
+      - name: Upload artifact (workflow)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-macos
+          path: |
+            src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app
+          if-no-files-found: ignore
+
+  # ============================================================
+  # Android(ubuntu,debug-signed apk)
+  # ============================================================
   android:
-    name: Android (apk)
+    name: Android (.apk)
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -133,7 +263,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Rust
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
@@ -151,23 +281,28 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
-      # Android 需要先生成图标(以防本地没跑过 generate-icons)
-      - name: Generate icons
-        run: node scripts/generate-icons.mjs
+      - name: Generate Tauri icons
+        run: npm run icons:tauri
 
-      - name: Build Android apk (debug-signed)
+      - name: Build & publish release (Android)
         uses: tauri-apps/tauri-action@v0
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v0-manual-{0}', github.run_id) }}
-          releaseName: ${{ github.ref_type == 'tag' && format('Schulte {0}', github.ref_name) || format('Schulte Manual {0}', github.run_id) }}
-          releaseBody: 'Android debug-signed APK'
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.run_id) }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Schulte v{0}', github.ref_name) || format('Schulte Manual Build {0}', github.run_id) }}
+          releaseBody: |
+            Cross-platform build of Schulte Grid (attention training app).
+            跨平台舒尔特方格注意力训练应用。
+
+            Android APK (debug-signed).
           releaseDraft: true
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
           args: --apk
 
-      - name: Upload artifact
-        if: success()
+      - name: Upload artifact (workflow)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: schulte-android
@@ -176,9 +311,11 @@ jobs:
             src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
           if-no-files-found: ignore
 
-  # ============== iOS(需要 macOS)================
+  # ============================================================
+  # iOS(无签名 .app;App Store 分发需配置 Apple 签名 secrets)
+  # ============================================================
   ios:
-    name: iOS (app)
+    name: iOS (.app unsigned)
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -190,7 +327,7 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install Rust
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
@@ -208,25 +345,65 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
-      - name: Generate icons
-        run: node scripts/generate-icons.mjs
+      - name: Generate Tauri icons
+        run: npm run icons:tauri
 
-      # 无签名:仅构建 .app 包;发布到 App Store 需
-      #   APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD /
-      #   APPLE_SIGNING_IDENTITY / APPLE_TEAM_ID  secrets
-      - name: Build iOS app
+      - name: Build & publish release (iOS)
         uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v0-manual-{0}', github.run_id) }}
-          releaseName: ${{ github.ref_type == 'tag' && format('Schulte {0}', github.ref_name) || format('Schulte Manual {0}', github.run_id) }}
-          releaseBody: 'iOS unsigned .app (development build).'
-          releaseDraft: true
-          args: --ipa false
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('manual-{0}', github.run_id) }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Schulte v{0}', github.ref_name) || format('Schulte Manual Build {0}', github.run_id) }}
+          releaseBody: |
+            Cross-platform build of Schulte Grid.
 
-      - name: Upload artifact
-        if: success()
+            iOS .app is **unsigned**. For App Store distribution, configure Apple signing secrets in repository settings.
+          releaseDraft: true
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          args: --no-bundle
+
+      - name: Upload artifact (workflow)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: schulte-ios
-          path: src-tauri/target/**/*.app
+          path: |
+            src-tauri/target/aarch64-apple-ios/release/**/*.app
+            src-tauri/target/aarch64-apple-ios-sim/release/**/*.app
+            src-tauri/target/x86_64-apple-ios/release/**/*.app
           if-no-files-found: ignore
+
+  # ============================================================
+  # 收尾:汇总 + 输出最终 Release 链接
+  # ============================================================
+  finalize:
+    name: Finalize Release
+    needs: [linux, windows, macos, android, ios]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show build status
+        run: |
+          echo "## Release Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux   | ${{ needs.linux.result   }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows | ${{ needs.windows.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS   | ${{ needs.macos.result   }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Android | ${{ needs.android.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| iOS     | ${{ needs.ios.result     }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "📦 Release: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "ℹ️  workflow_dispatch run (no tag release created)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Download all artifacts (logs / fallback)
+        if: failure()
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
