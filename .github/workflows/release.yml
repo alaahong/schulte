@@ -151,10 +151,17 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: stable
           targets: x86_64-pc-windows-msvc
+          default: true
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -174,6 +181,8 @@ jobs:
         run: |
           node --version
           npx tauri --version
+          rustc --version
+          link.exe 2>&1 | Select-Object -First 2
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
