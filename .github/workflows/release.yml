@@ -144,11 +144,14 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
+      - name: Install Tauri CLI
+        run: npm install --no-save @tauri-apps/cli@^2
+
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (Windows)
-        run: npx tauri build
+        run: npx --no-install tauri build
 
       - name: List bundle outputs
         run: |
@@ -280,11 +283,14 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
+      - name: Install Tauri CLI
+        run: npm install --no-save @tauri-apps/cli@^2
+
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (macOS x64)
-        run: npx tauri build --target x86_64-apple-darwin
+        run: npx --no-install tauri build --target x86_64-apple-darwin
 
       - name: List bundle outputs
         run: |
@@ -426,11 +432,14 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
+      - name: Install Tauri CLI
+        run: npm install --no-save @tauri-apps/cli@^2
+
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (iOS, no bundle = raw .app)
-        run: npx tauri build --no-bundle --target aarch64-apple-ios
+        run: npx --no-install tauri build --no-bundle --target aarch64-apple-ios
 
       - name: List .app outputs
         run: |
