@@ -186,19 +186,18 @@ jobs:
           where.exe cl.exe
 
       - name: Install Rust MSVC toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable-x86_64-pc-windows-msvc
-          components: rust-src, rustfmt, clippy
-
-      - name: Switch default toolchain to MSVC
         shell: pwsh
         run: |
-          rustup default stable-x86_64-pc-windows-msvc
+          Write-Host "--- Current rustup state ---"
           rustup show
-          rustc --print target-list | Select-String -Pattern "msvc" | Select-Object -First 3
-          where.exe link.exe | Select-Object -First 3
-          where.exe cl.exe | Select-Object -First 3
+          Write-Host "--- Installing MSVC toolchain ---"
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt --component clippy
+          if ($LASTEXITCODE -ne 0) { Write-Host "##[error]Failed to install MSVC toolchain"; exit 1 }
+          Write-Host "--- Setting default to MSVC ---"
+          rustup default stable-x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { Write-Host "##[error]Failed to set default toolchain"; exit 1 }
+          Write-Host "--- New rustup state ---"
+          rustup show
 
       - name: Cache cargo
         uses: actions/cache@v4
