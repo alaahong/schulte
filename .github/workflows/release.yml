@@ -150,8 +150,14 @@ jobs:
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
-      - name: Build Tauri (Windows)
-        run: npx --no-install tauri build
+      - name: Build Tauri (Linux)
+        run: |
+          echo "=== tauri CLI check ==="
+          npx --no-install tauri --version 2>&1 || true
+          echo "=== tauri info ==="
+          npx --no-install tauri info 2>&1 || true
+          echo "=== starting build ==="
+          npx --no-install tauri build 2>&1 | tail -200
 
       - name: List bundle outputs
         run: |
