@@ -1,7 +1,7 @@
 # 跨平台构建 + 自动发布
 # 触发:push tag v* / 手动 workflow_dispatch
 # 流程:
-#   1. 5 个独立 job 并行构建(Linux / Windows / macOS-arm64 / macOS-x64 / Android / iOS)
+#   1. 6 个独立 job 并行构建(Linux / Windows / macOS-arm64 / macOS-x64 / Android / iOS)
 #   2. 每个 job 自己跑 `npm run tauri:build` 产 bundle
 #   3. 通过 softprops/action-gh-release@v2 上传产物到当前 tag 对应的 GitHub Release(草稿)
 # 这样不依赖 tauri-action,避免 action 内部 npm 调用 / 配置兼容性
@@ -23,6 +23,7 @@ concurrency:
 # 公共:每个 job 都要的 tauri CLI 版本
 env:
   GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+  NODE_VERSION: '20'
 
 jobs:
   # ============================================================
@@ -38,7 +39,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: Install Linux deps
@@ -76,29 +77,42 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
-      - name: Install Tauri CLI
-        run: npm install --no-save @tauri-apps/cli@^2
+      - name: Verify Tauri CLI
+        run: |
+          echo "--- node ---"
+          node --version
+          echo "--- npm ---"
+          npm --version
+          echo "--- tauri (via npx) ---"
+          npx tauri --version || true
+          echo "--- tauri (via local bin) ---"
+          ls -la node_modules/.bin/tauri 2>&1 || true
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (Linux)
-        run: |
-          set -euo pipefail
-          echo "=== tauri CLI check ==="
-          npx --no-install tauri --version
-          echo "=== starting build ==="
-          npx --no-install tauri build
-          echo "=== bundle contents ==="
-          ls -laR src-tauri/target/release/bundle 2>&1 | head -100 || true
+        run: npm run tauri:build 2>&1 | tee build-linux.log
+        env:
+          CI: 'true'
 
       - name: List bundle outputs
+        if: always()
         run: |
           echo "--- bundle dir ---"
           find src-tauri/target/release/bundle -maxdepth 3 -type f 2>/dev/null | head -30
+          echo "--- end ---"
+
+      - name: Upload logs (workflow)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-linux-logs
+          path: build-linux.log
+          if-no-files-found: ignore
 
       - name: Upload to Release (Linux)
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' && success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -111,7 +125,7 @@ jobs:
           fail_on_unmatched_files: false
 
       - name: Upload artifact (workflow)
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: schulte-linux
@@ -133,7 +147,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: Setup Rust
@@ -154,29 +168,42 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
-      - name: Install Tauri CLI
-        run: npm install --no-save @tauri-apps/cli@^2
+      - name: Verify Tauri CLI
+        shell: pwsh
+        run: |
+          node --version
+          npm --version
+          npx tauri --version
+          Get-ChildItem node_modules/.bin/tauri* | ForEach-Object { $_.FullName }
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (Windows)
+        shell: pwsh
         run: |
-          echo "=== tauri CLI check ==="
-          npx --no-install tauri --version 2>&1 || true
-          echo "=== tauri info ==="
-          npx --no-install tauri info 2>&1 || true
-          echo "=== starting build ==="
-          npx --no-install tauri build 2>&1 | tail -200
+          npm run tauri:build 2>&1 | Tee-Object -FilePath build-windows.log
+        env:
+          CI: 'true'
 
       - name: List bundle outputs
+        if: always()
+        shell: pwsh
         run: |
           if (Test-Path src-tauri/target/release/bundle) {
             Get-ChildItem src-tauri/target/release/bundle -Recurse -File | Select-Object -First 30 | ForEach-Object { $_.FullName }
           }
 
+      - name: Upload logs (workflow)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-windows-logs
+          path: build-windows.log
+          if-no-files-found: ignore
+
       - name: Upload to Release (Windows)
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' && success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -189,7 +216,7 @@ jobs:
           fail_on_unmatched_files: false
 
       - name: Upload artifact (workflow)
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: schulte-windows
@@ -203,7 +230,7 @@ jobs:
   # ============================================================
   macos-arm64:
     name: macOS arm64 (.dmg)
-    runs-on: macos-latest
+    runs-on: macos-14  # 固定到 macOS 14,避免 macos-latest 升级带来的兼容性问题
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -211,7 +238,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: Setup Rust
@@ -232,28 +259,45 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
-      - name: Install Tauri CLI
-        run: npm install --no-save @tauri-apps/cli@^2
+      - name: Verify Tauri CLI
+        run: |
+          echo "--- node ---"
+          node --version
+          echo "--- tauri ---"
+          npx tauri --version
+          echo "--- rustc ---"
+          rustc --version
+          echo "--- xcode ---"
+          xcodebuild -version 2>&1 | head -3 || true
+          echo "--- sdk ---"
+          xcrun --show-sdk-version 2>&1 || true
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (macOS arm64)
         run: |
-          set -euo pipefail
-          echo "=== tauri CLI check ==="
-          npx --no-install tauri --version
-          echo "=== starting build ==="
-          npx --no-install tauri build --target aarch64-apple-darwin
-          echo "=== bundle contents ==="
-          ls -laR src-tauri/target/aarch64-apple-darwin/release/bundle 2>&1 | head -100 || true
+          npm run tauri:build -- --target aarch64-apple-darwin 2>&1 | tee build-macos-arm64.log
+        env:
+          CI: 'true'
 
       - name: List bundle outputs
+        if: always()
         run: |
+          echo "--- bundle dir ---"
           find src-tauri/target/aarch64-apple-darwin/release/bundle -maxdepth 3 -type f 2>/dev/null | head -30
+          echo "--- end ---"
+
+      - name: Upload logs (workflow)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-macos-arm64-logs
+          path: build-macos-arm64.log
+          if-no-files-found: ignore
 
       - name: Upload to Release (macOS arm64)
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' && success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -266,7 +310,7 @@ jobs:
           fail_on_unmatched_files: false
 
       - name: Upload artifact (workflow)
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: schulte-macos-arm64
@@ -280,7 +324,7 @@ jobs:
   # ============================================================
   macos-x64:
     name: macOS x64 (.dmg)
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -288,7 +332,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: Setup Rust
@@ -309,25 +353,37 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
-      - name: Install Tauri CLI
-        run: npm install --no-save @tauri-apps/cli@^2
+      - name: Verify Tauri CLI
+        run: |
+          node --version
+          npx tauri --version
+          rustc --version
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (macOS x64)
         run: |
-          echo "=== tauri CLI check ==="
-          npx --no-install tauri --version 2>&1 || true
-          echo "=== starting build ==="
-          npx --no-install tauri build --target x86_64-apple-darwin 2>&1 | tail -200
+          npm run tauri:build -- --target x86_64-apple-darwin 2>&1 | tee build-macos-x64.log
+        env:
+          CI: 'true'
 
       - name: List bundle outputs
+        if: always()
         run: |
           find src-tauri/target/x86_64-apple-darwin/release/bundle -maxdepth 3 -type f 2>/dev/null | head -30
+          echo "--- end ---"
+
+      - name: Upload logs (workflow)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-macos-x64-logs
+          path: build-macos-x64.log
+          if-no-files-found: ignore
 
       - name: Upload to Release (macOS x64)
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' && success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -340,7 +396,7 @@ jobs:
           fail_on_unmatched_files: false
 
       - name: Upload artifact (workflow)
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: schulte-macos-x64
@@ -362,7 +418,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: Setup JDK 17
@@ -392,8 +448,17 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
-      - name: Install Tauri CLI
-        run: npm install --no-save @tauri-apps/cli@^2
+      - name: Verify Tauri CLI
+        run: |
+          echo "--- node ---"
+          node --version
+          echo "--- tauri ---"
+          npx tauri --version
+          echo "--- java ---"
+          java -version 2>&1
+          echo "--- android sdk ---"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
@@ -401,22 +466,29 @@ jobs:
       - name: Build Tauri (Android)
         env:
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          CI: 'true'
         run: |
-          set -euo pipefail
-          echo "=== tauri CLI check ==="
-          npx --no-install tauri --version
-          echo "=== starting build ==="
-          npx --no-install tauri build --apk
-          echo "=== APK outputs ==="
-          find src-tauri/gen/android -name "*.apk" 2>/dev/null || true
+          npm run tauri:build -- --apk 2>&1 | tee build-android.log
 
       - name: List APK outputs
+        if: always()
         run: |
-          find src-tauri/gen/android/app/build/outputs -maxdepth 4 -name "*.apk" 2>/dev/null || true
-          find src-tauri/gen/android -name "*.apk" 2>/dev/null || true
+          echo "--- find APK ---"
+          find src-tauri/gen/android -name "*.apk" 2>/dev/null | head -20
+          echo "--- find AAB ---"
+          find src-tauri/gen/android -name "*.aab" 2>/dev/null | head -20
+          echo "--- end ---"
+
+      - name: Upload logs (workflow)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-android-logs
+          path: build-android.log
+          if-no-files-found: ignore
 
       - name: Upload to Release (Android)
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' && success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -429,7 +501,7 @@ jobs:
           fail_on_unmatched_files: false
 
       - name: Upload artifact (workflow)
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: schulte-android
@@ -439,11 +511,11 @@ jobs:
           if-no-files-found: ignore
 
   # ============================================================
-  # iOS
+  # iOS (只产 .app,不签名)
   # ============================================================
   ios:
     name: iOS (.app unsigned)
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -451,7 +523,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
       - name: Setup Rust
@@ -472,28 +544,38 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
-      - name: Install Tauri CLI
-        run: npm install --no-save @tauri-apps/cli@^2
+      - name: Verify Tauri CLI
+        run: |
+          node --version
+          npx tauri --version
+          rustc --version
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
-      - name: Build Tauri (iOS, no bundle = raw .app)
+      - name: Build Tauri (iOS, raw .app)
         run: |
-          set -euo pipefail
-          echo "=== tauri CLI check ==="
-          npx --no-install tauri --version
-          echo "=== starting build ==="
-          npx --no-install tauri build --no-bundle --target aarch64-apple-ios
-          echo "=== .app outputs ==="
-          find src-tauri/target/aarch64-apple-ios -name "*.app" 2>/dev/null || true
+          npx tauri build --no-bundle --target aarch64-apple-ios 2>&1 | tee build-ios.log
+        env:
+          CI: 'true'
 
       - name: List .app outputs
+        if: always()
         run: |
-          find src-tauri/target/aarch64-apple-ios/release -maxdepth 3 -name "*.app" 2>/dev/null
+          echo "--- find .app ---"
+          find src-tauri/target/aarch64-apple-ios -maxdepth 4 -name "*.app" 2>/dev/null | head -10
+          echo "--- end ---"
+
+      - name: Upload logs (workflow)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-ios-logs
+          path: build-ios.log
+          if-no-files-found: ignore
 
       - name: Upload to Release (iOS)
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' && success()
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -501,16 +583,16 @@ jobs:
           draft: true
           prerelease: false
           files: |
-            src-tauri/target/aarch64-apple-ios/release/**/*.app
+            src-tauri/target/aarch64-apple-ios/**/*.app
           fail_on_unmatched_files: false
 
       - name: Upload artifact (workflow)
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: schulte-ios
           path: |
-            src-tauri/target/aarch64-apple-ios/release/**/*.app
+            src-tauri/target/aarch64-apple-ios/**/*.app
           if-no-files-found: ignore
 
   # ============================================================
@@ -526,7 +608,7 @@ jobs:
         run: |
           echo "## Release Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Result |" >> $GITHUB_STEP_SUMMARY
           echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Linux       | ${{ needs.linux.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Windows     | ${{ needs.windows.result }} |" >> $GITHUB_STEP_SUMMARY
@@ -536,5 +618,5 @@ jobs:
           echo "| iOS         | ${{ needs.ios.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "📦 Release: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+            echo "Release: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           fi
