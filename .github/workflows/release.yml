@@ -154,13 +154,13 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
+          vs: 2022
           arch: x64
 
-      - name: Setup Rust
+      - name: Setup Rust (MSVC)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
-          targets: x86_64-pc-windows-msvc
+          toolchain: stable-x86_64-pc-windows-msvc
           default: true
 
       - name: Cache cargo
