@@ -157,11 +157,20 @@ jobs:
           vs: 2022
           arch: x64
 
-      - name: Setup Rust (MSVC)
+      - name: Install Rust MSVC toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable-x86_64-pc-windows-msvc
-          default: true
+          components: rust-src, rustfmt, clippy
+
+      - name: Switch default toolchain to MSVC
+        shell: pwsh
+        run: |
+          rustup default stable-x86_64-pc-windows-msvc
+          rustup show
+          rustc --print target-list | Select-String -Pattern "msvc" | Select-Object -First 3
+          where.exe link.exe | Select-Object -First 3
+          where.exe cl.exe | Select-Object -First 3
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -181,6 +190,7 @@ jobs:
         run: |
           node --version
           npx tauri --version
+          rustup show
           rustc --version
           link.exe 2>&1 | Select-Object -First 2
 
