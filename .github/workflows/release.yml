@@ -151,11 +151,39 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          vsversion: '2022'
-          arch: x64
+      - name: Setup MSVC environment
+        shell: pwsh
+        run: |
+          Write-Host "--- Looking for Visual Studio ---"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          }
+          Write-Host "vswhere: $vswhere"
+          $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>&1
+          if (-not $vsPath) {
+            $vsPath = & $vswhere -latest -products '*' -property installationPath 2>&1
+          }
+          Write-Host "VS Path: $vsPath"
+          if (-not $vsPath) {
+            Write-Host "##[error]No Visual Studio installation found"
+            exit 1
+          }
+          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars)) {
+            $vcvars = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
+          }
+          Write-Host "vcvars: $vcvars"
+          Write-Host "--- Loading vcvars ---"
+          cmd.exe /c "`"$vcvars`" && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') {
+              [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
+            }
+          }
+          Write-Host "--- where link.exe ---"
+          where.exe link.exe
+          Write-Host "--- where cl.exe ---"
+          where.exe cl.exe
 
       - name: Install Rust MSVC toolchain
         uses: dtolnay/rust-toolchain@stable
