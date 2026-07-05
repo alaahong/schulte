@@ -84,10 +84,13 @@ jobs:
 
       - name: Build Tauri (Linux)
         run: |
+          set -euo pipefail
           echo "=== tauri CLI check ==="
-          npx --no-install tauri --version 2>&1 || true
+          npx --no-install tauri --version
           echo "=== starting build ==="
-          npx --no-install tauri build 2>&1 | tail -200
+          npx --no-install tauri build
+          echo "=== bundle contents ==="
+          ls -laR src-tauri/target/release/bundle 2>&1 | head -100 || true
 
       - name: List bundle outputs
         run: |
@@ -237,10 +240,13 @@ jobs:
 
       - name: Build Tauri (macOS arm64)
         run: |
+          set -euo pipefail
           echo "=== tauri CLI check ==="
-          npx --no-install tauri --version 2>&1 || true
+          npx --no-install tauri --version
           echo "=== starting build ==="
-          npx --no-install tauri build --target aarch64-apple-darwin 2>&1 | tail -200
+          npx --no-install tauri build --target aarch64-apple-darwin
+          echo "=== bundle contents ==="
+          ls -laR src-tauri/target/aarch64-apple-darwin/release/bundle 2>&1 | head -100 || true
 
       - name: List bundle outputs
         run: |
@@ -396,15 +402,18 @@ jobs:
         env:
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
         run: |
+          set -euo pipefail
           echo "=== tauri CLI check ==="
-          npx --no-install tauri --version 2>&1 || true
+          npx --no-install tauri --version
           echo "=== starting build ==="
-          npx --no-install tauri build --apk 2>&1 | tail -200
+          npx --no-install tauri build --apk
+          echo "=== APK outputs ==="
+          find src-tauri/gen/android -name "*.apk" 2>/dev/null || true
 
       - name: List APK outputs
         run: |
-          find src-tauri/gen/android/app/build/outputs -maxdepth 4 -name "*.apk" 2>/dev/null
-          find src-tauri/gen/android/app/build/outputs -maxdepth 4 -name "*.aab" 2>/dev/null
+          find src-tauri/gen/android/app/build/outputs -maxdepth 4 -name "*.apk" 2>/dev/null || true
+          find src-tauri/gen/android -name "*.apk" 2>/dev/null || true
 
       - name: Upload to Release (Android)
         if: github.ref_type == 'tag'
@@ -471,10 +480,13 @@ jobs:
 
       - name: Build Tauri (iOS, no bundle = raw .app)
         run: |
+          set -euo pipefail
           echo "=== tauri CLI check ==="
-          npx --no-install tauri --version 2>&1 || true
+          npx --no-install tauri --version
           echo "=== starting build ==="
-          npx --no-install tauri build --no-bundle --target aarch64-apple-ios 2>&1 | tail -200
+          npx --no-install tauri build --no-bundle --target aarch64-apple-ios
+          echo "=== .app outputs ==="
+          find src-tauri/target/aarch64-apple-ios -name "*.app" 2>/dev/null || true
 
       - name: List .app outputs
         run: |
