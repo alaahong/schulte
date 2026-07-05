@@ -42,16 +42,12 @@
     "longDescription": "跨平台舒尔特方格注意力训练应用,支持桌面、Web、移动端。",
     "publisher": "Schulte App",
     "copyright": "© 2026",
-    "ios": {
-      "minimumSystemVersion": "13.0",
-      "frameworks": [],
-      "developmentTeam": null,
-      "signingIdentity": null
+    "iOS": {
+      "minimumSystemVersion": "13.0"
     },
     "android": {
       "minSdkVersion": 24,
-      "targetSdkVersion": 34,
-      "versionCode": 1
+      "autoIncrementVersionCode": false
     }
   },
   "plugins": {}

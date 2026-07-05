@@ -2,9 +2,12 @@
 # 触发:push tag v* / 手动 workflow_dispatch
 # 流程:
 #   1. 6 个独立 job 并行构建(Linux / Windows / macOS-arm64 / macOS-x64 / Android / iOS)
-#   2. 每个 job 自己跑 `npm run tauri:build` 产 bundle
+#   2. 每个 job 自己跑 `npm run tauri:build`(或对应 mobile 子命令)产 bundle
 #   3. 通过 softprops/action-gh-release@v2 上传产物到当前 tag 对应的 GitHub Release(草稿)
-# 这样不依赖 tauri-action,避免 action 内部 npm 调用 / 配置兼容性
+# 关键点:
+#   - 使用 `set -o pipefail` 让 pipe 中的真实错误不被 tee 屏蔽
+#   - 移动端 (Android/iOS) 必须先 `tauri mobile init` 再 `tauri mobile build`
+#   - 修复 tauri.conf.json 中 iOS 必须是 `iOS`(大写),Android 不能有 `targetSdkVersion`
 name: Release Build
 
 on:
@@ -81,18 +84,16 @@ jobs:
         run: |
           echo "--- node ---"
           node --version
-          echo "--- npm ---"
-          npm --version
-          echo "--- tauri (via npx) ---"
-          npx tauri --version || true
-          echo "--- tauri (via local bin) ---"
-          ls -la node_modules/.bin/tauri 2>&1 || true
+          echo "--- tauri ---"
+          npx tauri --version
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (Linux)
-        run: npm run tauri:build 2>&1 | tee build-linux.log
+        run: |
+          set -o pipefail
+          npx tauri build 2>&1 | tee build-linux.log
         env:
           CI: 'true'
 
@@ -172,9 +173,7 @@ jobs:
         shell: pwsh
         run: |
           node --version
-          npm --version
           npx tauri --version
-          Get-ChildItem node_modules/.bin/tauri* | ForEach-Object { $_.FullName }
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
@@ -182,7 +181,9 @@ jobs:
       - name: Build Tauri (Windows)
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Continue'
           npm run tauri:build 2>&1 | Tee-Object -FilePath build-windows.log
+          exit $LASTEXITCODE
         env:
           CI: 'true'
 
@@ -230,7 +231,7 @@ jobs:
   # ============================================================
   macos-arm64:
     name: macOS arm64 (.dmg)
-    runs-on: macos-14  # 固定到 macOS 14,避免 macos-latest 升级带来的兼容性问题
+    runs-on: macos-14
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -261,30 +262,23 @@ jobs:
 
       - name: Verify Tauri CLI
         run: |
-          echo "--- node ---"
           node --version
-          echo "--- tauri ---"
           npx tauri --version
-          echo "--- rustc ---"
           rustc --version
-          echo "--- xcode ---"
-          xcodebuild -version 2>&1 | head -3 || true
-          echo "--- sdk ---"
-          xcrun --show-sdk-version 2>&1 || true
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (macOS arm64)
         run: |
-          npm run tauri:build -- --target aarch64-apple-darwin 2>&1 | tee build-macos-arm64.log
+          set -o pipefail
+          npx tauri build --target aarch64-apple-darwin 2>&1 | tee build-macos-arm64.log
         env:
           CI: 'true'
 
       - name: List bundle outputs
         if: always()
         run: |
-          echo "--- bundle dir ---"
           find src-tauri/target/aarch64-apple-darwin/release/bundle -maxdepth 3 -type f 2>/dev/null | head -30
           echo "--- end ---"
 
@@ -364,7 +358,8 @@ jobs:
 
       - name: Build Tauri (macOS x64)
         run: |
-          npm run tauri:build -- --target x86_64-apple-darwin 2>&1 | tee build-macos-x64.log
+          set -o pipefail
+          npx tauri build --target x86_64-apple-darwin 2>&1 | tee build-macos-x64.log
         env:
           CI: 'true'
 
@@ -406,7 +401,7 @@ jobs:
           if-no-files-found: ignore
 
   # ============================================================
-  # Android
+  # Android (APK)
   # ============================================================
   android:
     name: Android (.apk)
@@ -450,25 +445,33 @@ jobs:
 
       - name: Verify Tauri CLI
         run: |
-          echo "--- node ---"
           node --version
-          echo "--- tauri ---"
           npx tauri --version
-          echo "--- java ---"
           java -version 2>&1
-          echo "--- android sdk ---"
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
-      - name: Build Tauri (Android)
+      - name: Init Android project (idempotent)
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+        run: |
+          if [ ! -d "src-tauri/gen/android" ]; then
+            echo "--- Running tauri android init ---"
+            npx tauri android init
+          else
+            echo "--- src-tauri/gen/android already exists, skipping init ---"
+          fi
+
+      - name: Build Tauri (Android APK)
         env:
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
           CI: 'true'
         run: |
-          npm run tauri:build -- --apk 2>&1 | tee build-android.log
+          set -o pipefail
+          npx tauri android build --apk 2>&1 | tee build-android.log
 
       - name: List APK outputs
         if: always()
@@ -511,7 +514,7 @@ jobs:
           if-no-files-found: ignore
 
   # ============================================================
-  # iOS (只产 .app,不签名)
+  # iOS (产 .app, 不签名)
   # ============================================================
   ios:
     name: iOS (.app unsigned)
@@ -553,17 +556,27 @@ jobs:
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
-      - name: Build Tauri (iOS, raw .app)
+      - name: Init iOS project (idempotent)
         run: |
-          npx tauri build --no-bundle --target aarch64-apple-ios 2>&1 | tee build-ios.log
+          if [ ! -d "src-tauri/gen/apple" ] && [ ! -d "src-tauri/gen/ios" ]; then
+            echo "--- Running tauri ios init ---"
+            npx tauri ios init || echo "init failed, will try direct build"
+          else
+            echo "--- iOS project already exists, skipping init ---"
+          fi
+
+      - name: Build Tauri (iOS raw .app, no codesign)
         env:
           CI: 'true'
+        run: |
+          set -o pipefail
+          npx tauri build --no-bundle --target aarch64-apple-ios 2>&1 | tee build-ios.log
 
       - name: List .app outputs
         if: always()
         run: |
           echo "--- find .app ---"
-          find src-tauri/target/aarch64-apple-ios -maxdepth 4 -name "*.app" 2>/dev/null | head -10
+          find src-tauri/target -name "*.app" -maxdepth 6 2>/dev/null | head -10
           echo "--- end ---"
 
       - name: Upload logs (workflow)
@@ -583,7 +596,7 @@ jobs:
           draft: true
           prerelease: false
           files: |
-            src-tauri/target/aarch64-apple-ios/**/*.app
+            src-tauri/target/**/*.app
           fail_on_unmatched_files: false
 
       - name: Upload artifact (workflow)
@@ -592,7 +605,7 @@ jobs:
         with:
           name: schulte-ios
           path: |
-            src-tauri/target/aarch64-apple-ios/**/*.app
+            src-tauri/target/**/*.app
           if-no-files-found: ignore
 
   # ============================================================
