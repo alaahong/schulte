@@ -1,0 +1,58 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "舒尔特方格",
+  "version": "0.1.0",
+  "identifier": "com.schulte.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "舒尔特方格 · 注意力训练",
+        "width": 900,
+        "height": 700,
+        "minWidth": 360,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Education",
+    "shortDescription": "舒尔特方格注意力训练",
+    "longDescription": "跨平台舒尔特方格注意力训练应用,支持桌面、Web、移动端。",
+    "publisher": "Schulte App",
+    "copyright": "© 2026",
+    "ios": {
+      "minimumSystemVersion": "13.0",
+      "frameworks": [],
+      "developmentTeam": null,
+      "signingIdentity": null
+    },
+    "android": {
+      "minSdkVersion": 24,
+      "targetSdkVersion": 34,
+      "versionCode": 1
+    }
+  },
+  "plugins": {}
+}

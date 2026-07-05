@@ -1,0 +1,159 @@
+/**
+ * English (US) translations.
+ * Keys not present here will fall back to zh-CN.
+ */
+export const enUS: Record<string, string> = {
+  // ===== common =====
+  'common.confirm.clearHistory': 'Clear all history records? This cannot be undone.',
+  'common.back': 'Back',
+  'common.confirm': 'OK',
+  'common.cancel': 'Cancel',
+  'common.language': 'Language',
+  'common.all': 'All',
+  'common.allModes': 'All modes',
+
+  // ===== app =====
+  'app.title': 'Schulte Grid',
+  'app.tagline': 'Focus training · 5–10 min / day',
+
+  // ===== home =====
+  'home.modes': 'Training Modes',
+  'home.gridSize': 'Grid Size',
+  'home.start': 'Start Training',
+  'home.about': 'How it works',
+  'home.best': 'Best {time}',
+  'home.noRecord': 'No record',
+  'home.history': 'History',
+  'home.settings': 'Settings',
+
+  // ===== play =====
+  'play.nextTarget': 'Next target',
+  'play.errors': 'Errors',
+  'play.paused': 'Paused',
+  'play.replay': 'Restart',
+  'play.quit': 'Quit',
+  'play.back': 'Back',
+  'play.again': 'Play again',
+  'play.newRecord': 'New best!',
+  'play.finished': 'Training complete',
+  'play.interrupted': 'Training interrupted',
+  'play.errorsCount': '{n} mistake(s)',
+  'play.cellAria': 'Cell {value}',
+  'play.colorLabel': '{name}',
+
+  // ===== history =====
+  'history.title': 'History',
+  'history.empty': 'No training records yet',
+  'history.emptyHint': 'Finish a session and your progress will show up here.',
+  'history.clear': 'Clear',
+  'history.mistakes': '{n} miss',
+
+  // ===== settings =====
+  'settings.title': 'Settings',
+  'settings.theme': 'Theme',
+  'settings.themeLight': 'Light',
+  'settings.themeDark': 'Dark',
+  'settings.themeAuto': 'System',
+  'settings.ageGroup': 'Age group (for rating)',
+  'settings.behavior': 'Training behavior',
+  'settings.strictMode': 'Strict mode',
+  'settings.strictModeDesc': 'End the run immediately on a wrong tap',
+  'settings.highlightOnClick': 'Highlight on click',
+  'settings.highlightOnClickDesc': 'Fade clicked cells after tapping',
+  'settings.sound': 'Sound',
+  'settings.soundDesc': 'Beep on click / error / complete',
+  'settings.haptic': 'Haptics',
+  'settings.hapticDesc': 'Vibration (supported devices)',
+  'settings.centerDot': 'Center dot',
+  'settings.centerDotDesc': 'Train central fixation',
+  'settings.cellStyle': 'Number mode · Cell style',
+  'settings.cellShape': 'Cell shape',
+  'settings.palette': 'Color mode · Palette',
+  'settings.paletteHint': 'Pick the colors that appear in color mode (at least 2). They rotate in selection order: Red → Blue → ...',
+  'settings.paletteSelected': 'Selected {sel} / {total} colors',
+  'settings.paletteReset': 'Reset to default',
+  'settings.data': 'Data',
+  'settings.clearHistory': 'Clear history',
+  'settings.aboutLink': 'How it works →',
+  'settings.language': 'Interface language',
+
+  // ===== about =====
+  'about.title': 'About Schulte Grid',
+  'about.whatTitle': 'What is Schulte Grid?',
+  'about.whatBody': 'Schulte Grid was introduced by German psychologist Walter Schulte in the 1960s, originally to train attention in pilots and astronauts. It is an N×N table of digits 1…N² in random positions; the user must tap them in order as fast as possible.',
+  'about.trainTitle': 'What does it train?',
+  'about.trainStability': 'Sustained attention',
+  'about.trainStabilityDesc': 'Stay focused throughout the session',
+  'about.trainSpan': 'Span of attention',
+  'about.trainSpanDesc': 'Use peripheral vision to cover many targets at once',
+  'about.trainDistribution': 'Attention distribution',
+  'about.trainDistributionDesc': 'Handle multiple tasks at the same time (esp. alternating / Gorbov)',
+  'about.trainSpeed': 'Visual search speed',
+  'about.trainSpeedDesc': 'Find targets quickly in noisy visual input',
+  'about.refTitle': 'Reference times (5×5)',
+  'about.refAge': 'Age group',
+  'about.refNote': 'Other grid sizes scale proportionally by N²/25.',
+  'about.tipTitle': 'Tips',
+  'about.tip1': 'Stare at the center of the grid; use peripheral vision to find numbers',
+  'about.tip2': 'Accuracy first, speed second — never guess',
+  'about.tip3': '5–10 minutes a day is enough; consistency is what matters',
+  'about.tip4': 'Start with 3×3 / 4×4, then work up to 5×5 / 6×6',
+  'about.tip5': 'Turn strict mode off while you are learning; switch it back on later',
+  'about.platformTitle': 'Platforms',
+  'about.platformBody': 'Built with Tauri 2 + Vue 3. Ships as Windows / macOS / Linux desktop apps, iOS / Android native apps, and a Web / PWA build.',
+  'about.footer': 'v0.1.0 · Made with focus',
+
+  // ===== modes =====
+  'modes.asc': 'Ascending',
+  'modes.desc': 'Descending',
+  'modes.alternating': 'Alternating',
+  'modes.gorbov': 'Gorbov',
+  'modes.color': 'Color',
+  'modes.custom': 'Custom',
+  'modes.ascDesc': 'Tap 1 → N² in order',
+  'modes.descDesc': 'Tap N² → 1 in reverse',
+  'modes.alternatingDesc': 'Low → high → low; trains attention switching',
+  'modes.gorbovDesc': 'Red/black; track both color and order',
+  'modes.colorDesc': 'Rotate through the picked palette; tune in Settings',
+  'modes.customDesc': 'Custom symbols',
+
+  // ===== rating =====
+  'rating.excellent': 'Excellent',
+  'rating.good': 'Good',
+  'rating.fair': 'Fair',
+  'rating.poor': 'Poor',
+
+  // ===== age group =====
+  'age.7-12': '7–12 yrs',
+  'age.12-17': '12–17 yrs',
+  'age.18+': '18+ yrs',
+  'age.kid': 'Child',
+  'age.teen': 'Teen',
+  'age.adult': 'Adult',
+
+  // ===== cell style =====
+  'styles.solid': 'Solid',
+  'styles.solidDesc': 'White with border (default)',
+  'styles.multi': 'Multi',
+  'styles.multiDesc': 'Random fill from the palette (harder)',
+
+  // ===== cell shape =====
+  'shapes.square': 'Square',
+  'shapes.squareDesc': 'Rounded square (default)',
+  'shapes.rounded': 'Rounded',
+  'shapes.roundedDesc': 'More rounded',
+  'shapes.circle': 'Circle',
+  'shapes.circleDesc': 'Full circle',
+  'shapes.irregular': 'Irregular',
+  'shapes.irregularDesc': 'Per-cell random shape (fun)',
+
+  // ===== palette =====
+  'palette.red': 'Red',
+  'palette.amber': 'Orange',
+  'palette.emerald': 'Green',
+  'palette.blue': 'Blue',
+  'palette.violet': 'Purple',
+  'palette.pink': 'Pink',
+  'palette.selected': '{name} (selected)',
+  'palette.unselected': '{name} (not picked)'
+}

@@ -1,0 +1,48 @@
+{
+  "name": "schulte-grid",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-platform Schulte Grid attention training app",
+  "scripts": {
+    "prebuild": "node scripts/generate-icons.mjs",
+    "predev": "node scripts/generate-icons.mjs",
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "tauri:icon": "tauri icon src-tauri/icons/icon.svg",
+    "tauri:ios:dev": "tauri dev --target ios",
+    "tauri:ios:build": "tauri ios build",
+    "tauri:android:dev": "tauri dev --target android",
+    "tauri:android:build": "tauri android build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "dexie": "^4.0.10",
+    "pinia": "^2.3.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/cli": "^2.1.0",
+    "@types/node": "^22.10.2",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "autoprefixer": "^10.4.20",
+    "happy-dom": "^20.10.6",
+    "postcss": "^8.4.49",
+    "sharp": "^0.35.3",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vite-plugin-pwa": "^0.21.1",
+    "vitest": "^2.1.8",
+    "vue-tsc": "^2.1.10"
+  }
+}

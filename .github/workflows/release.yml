@@ -1,0 +1,232 @@
+# 跨平台构建 + 自动发布
+# 触发:push tag v* / 手动触发
+# 产物:
+#   - 桌面:Windows .msi/.exe / macOS .dmg / Linux .deb/.AppImage
+#   - Android:.apk
+#   - iOS:.app / .ipa(需 macOS + Apple Developer 签名)
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '可选:要构建的 tag(留空则用当前 commit)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  # ============== 桌面(Windows + macOS + Linux)================
+  desktop:
+    name: Desktop (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: universal-apple-darwin
+            args: '--target universal-apple-darwin'
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: ''
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # Linux 桌面需要若干系统库
+      - name: Install Linux deps
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libssl-dev \
+            libgtk-3-dev
+
+      # Rust 工具链 + 缓存
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ matrix.platform }}-${{ matrix.target }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.platform }}-${{ matrix.target }}-
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v0-manual-{0}', github.run_id) }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Schulte {0}', github.ref_name) || format('Schulte Manual {0}', github.run_id) }}
+          releaseBody: 'See assets below for Windows / macOS / Linux binaries.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Upload artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-desktop-${{ matrix.platform }}
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app
+          if-no-files-found: ignore
+
+  # ============== Android ================
+  android:
+    name: Android (apk)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-android-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-android-
+
+      - name: Install JS deps
+        run: npm ci
+
+      # Android 需要先生成图标(以防本地没跑过 generate-icons)
+      - name: Generate icons
+        run: node scripts/generate-icons.mjs
+
+      - name: Build Android apk (debug-signed)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v0-manual-{0}', github.run_id) }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Schulte {0}', github.ref_name) || format('Schulte Manual {0}', github.run_id) }}
+          releaseBody: 'Android debug-signed APK'
+          releaseDraft: true
+          args: --apk
+
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-android
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+          if-no-files-found: ignore
+
+  # ============== iOS(需要 macOS)================
+  ios:
+    name: iOS (app)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-ios-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-ios-
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Generate icons
+        run: node scripts/generate-icons.mjs
+
+      # 无签名:仅构建 .app 包;发布到 App Store 需
+      #   APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD /
+      #   APPLE_SIGNING_IDENTITY / APPLE_TEAM_ID  secrets
+      - name: Build iOS app
+        uses: tauri-apps/tauri-action@v0
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v0-manual-{0}', github.run_id) }}
+          releaseName: ${{ github.ref_type == 'tag' && format('Schulte {0}', github.ref_name) || format('Schulte Manual {0}', github.run_id) }}
+          releaseBody: 'iOS unsigned .app (development build).'
+          releaseDraft: true
+          args: --ipa false
+
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-ios
+          path: src-tauri/target/**/*.app
+          if-no-files-found: ignore

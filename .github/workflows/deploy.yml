@@ -1,0 +1,62 @@
+# GitHub Pages 自动部署
+# 触发:push 到 main / 手动触发
+# 流程:checkout → setup node → npm ci → build → 上传 dist/ → 部署到 Pages
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 允许一个并发部署;新 push 取消旧 in-progress 部署
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 不在 fork 的 PR 上跑(保护 token)
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check + build
+        # 复用本地 build 脚本:vue-tsc --noEmit && vite build
+        # 通过 GITHUB_REPOSITORY 注入 base 路径
+        run: npm run build
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

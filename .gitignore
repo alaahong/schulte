@@ -1,0 +1,33 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.log
+.env.local
+.env.*.local
+
+# Tauri
+src-tauri/target/
+src-tauri/Cargo.lock
+src-tauri/gen/
+
+# PWA
+dev-dist/
+
+# 比赛 / 临时验证文件
+docs/competition/verify-*.png
+docs/competition/verify-*.jpg
+docs/competition/screenshots/*.tmp
+
+# Playwright
+playwright-report/
+test-results/
+
+# IDE / OS
+Thumbs.db
+*.swp
+
