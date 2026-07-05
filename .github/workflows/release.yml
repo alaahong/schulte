@@ -76,11 +76,18 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
+      - name: Install Tauri CLI
+        run: npm install --no-save @tauri-apps/cli@^2
+
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (Linux)
-        run: npx tauri build
+        run: |
+          echo "=== tauri CLI check ==="
+          npx --no-install tauri --version 2>&1 || true
+          echo "=== starting build ==="
+          npx --no-install tauri build 2>&1 | tail -200
 
       - name: List bundle outputs
         run: |
@@ -150,7 +157,7 @@ jobs:
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
-      - name: Build Tauri (Linux)
+      - name: Build Tauri (Windows)
         run: |
           echo "=== tauri CLI check ==="
           npx --no-install tauri --version 2>&1 || true
@@ -222,11 +229,18 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
+      - name: Install Tauri CLI
+        run: npm install --no-save @tauri-apps/cli@^2
+
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (macOS arm64)
-        run: npx tauri build --target aarch64-apple-darwin
+        run: |
+          echo "=== tauri CLI check ==="
+          npx --no-install tauri --version 2>&1 || true
+          echo "=== starting build ==="
+          npx --no-install tauri build --target aarch64-apple-darwin 2>&1 | tail -200
 
       - name: List bundle outputs
         run: |
@@ -296,7 +310,11 @@ jobs:
         run: npm run icons:tauri
 
       - name: Build Tauri (macOS x64)
-        run: npx --no-install tauri build --target x86_64-apple-darwin
+        run: |
+          echo "=== tauri CLI check ==="
+          npx --no-install tauri --version 2>&1 || true
+          echo "=== starting build ==="
+          npx --no-install tauri build --target x86_64-apple-darwin 2>&1 | tail -200
 
       - name: List bundle outputs
         run: |
@@ -368,13 +386,20 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
+      - name: Install Tauri CLI
+        run: npm install --no-save @tauri-apps/cli@^2
+
       - name: Generate Tauri icons
         run: npm run icons:tauri
 
       - name: Build Tauri (Android)
         env:
           ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
-        run: npx tauri build --apk
+        run: |
+          echo "=== tauri CLI check ==="
+          npx --no-install tauri --version 2>&1 || true
+          echo "=== starting build ==="
+          npx --no-install tauri build --apk 2>&1 | tail -200
 
       - name: List APK outputs
         run: |
@@ -445,7 +470,11 @@ jobs:
         run: npm run icons:tauri
 
       - name: Build Tauri (iOS, no bundle = raw .app)
-        run: npx --no-install tauri build --no-bundle --target aarch64-apple-ios
+        run: |
+          echo "=== tauri CLI check ==="
+          npx --no-install tauri --version 2>&1 || true
+          echo "=== starting build ==="
+          npx --no-install tauri build --no-bundle --target aarch64-apple-ios 2>&1 | tail -200
 
       - name: List .app outputs
         run: |
