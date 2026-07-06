@@ -1,0 +1,52 @@
+name: debug-release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check token scopes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Token scopes via gh api:"
+          gh api -i /repos/${{ github.repository }} | grep -i '^x-oauth-scopes'
+          echo ""
+          echo "Token info via gh api:"
+          gh api /user 2>&1 | head -20
+
+      - name: Check tag exists
+        run: |
+          git rev-parse ${{ github.ref_name }}
+          echo "Tag: ${{ github.ref_name }}"
+          echo "SHA: ${{ github.sha }}"
+
+      - name: Try to create release via gh CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -x
+          gh release create "${{ github.ref_name }}" \
+            --title "Test ${{ github.ref_name }}" \
+            --draft \
+            --generate-notes \
+            2>&1
+          echo "Exit: $?"
+
+      - name: Check what releases exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --limit 5 2>&1
+          echo "---"
+          gh release view "${{ github.ref_name }}" 2>&1 || echo "View failed with exit $?"
+          echo "---"
+          gh api /repos/${{ github.repository }}/releases/tags/${{ github.ref_name }} 2>&1 | head -30
