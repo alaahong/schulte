@@ -81,37 +81,76 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_id: ${{ steps.create.outputs.id }}
-      upload_url: ${{ steps.create.outputs.upload_url }}
+      release_url: ${{ steps.create.outputs.html_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Create draft GitHub Release
+      - name: Create draft GitHub Release (gh CLI)
         id: create
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Schulte ${{ github.ref_name }}
-          draft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
-          fail_on_unmatched_files: false
-          # 不在创建步骤里附加文件,所有文件由后续构建 job 上传
-
-      - name: Verify release was created
         env:
-          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Release ID: ${{ steps.create.outputs.id }}"
-          echo "Upload URL: ${{ steps.create.outputs.upload_url }}"
-          echo "Tag: ${TAG}"
-          if [ -z "${{ steps.create.outputs.id }}" ]; then
-            echo "##[error]Release was not created (id is empty)"
+          set -euo pipefail
+          echo "Creating draft release for tag: ${{ github.ref_name }}"
+          # 1. 确保 tag 存在(已由 push tags 触发,但再次确认)
+          if ! git rev-parse "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "##[error]Tag ${{ github.ref_name }} not found"
             exit 1
           fi
+          # 2. 删除可能已存在的旧 release(草稿),避免冲突
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "Existing release for ${{ github.ref_name }} found, deleting it first"
+            gh release delete "${{ github.ref_name }}" --yes || true
+          fi
+          # 3. 创建 draft release
+          CREATE_OUT=$(gh release create "${{ github.ref_name }}" \
+            --title "Schulte ${{ github.ref_name }}" \
+            --draft \
+            --generate-notes \
+            --target "${{ github.sha }}" \
+            2>&1)
+          echo "$CREATE_OUT"
+          # 4. 解析 URL 作为输出
+          RELEASE_URL=$(echo "$CREATE_OUT" | grep -E '^https://' | head -n1)
+          if [ -z "$RELEASE_URL" ]; then
+            echo "##[error]Failed to create release - no URL in output"
+            echo "$CREATE_OUT"
+            exit 1
+          fi
+          echo "Release URL: $RELEASE_URL"
+          # 5. 重新获取 release id 用于 outputs
+          RELEASE_ID=$(gh release view "${{ github.ref_name }}" --json id --jq '.id')
+          echo "Release ID: $RELEASE_ID"
+          {
+            echo "id=$RELEASE_ID"
+            echo "html_url=$RELEASE_URL"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify release via API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
           echo "## Release created successfully ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** \`${TAG}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Release ID:** ${{ steps.create.outputs.id }}" >> $GITHUB_STEP_SUMMARY
+          echo "**URL:** ${{ steps.create.outputs.html_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All build jobs will now upload their artifacts to this release." >> $GITHUB_STEP_SUMMARY
+          # 再次通过 API 验证 release 存在
+          echo "--- Verifying release exists via API ---"
+          gh release view "${TAG}" --json id,name,tagName,draft,url | tee /tmp/release-info.json
+          DRAFT=$(jq -r '.draft' /tmp/release-info.json)
+          if [ "$DRAFT" != "true" ]; then
+            echo "##[error]Release is not a draft (draft=$DRAFT)"
+            exit 1
+          fi
+          echo "Release verified: draft=$DRAFT"
 
   # ============================================================
   # Linux 桌面
