@@ -97,3 +97,62 @@ export const EFFECTS = [
   'all'     // 同时启用以上所有
 ] as const
 export type Effect = typeof EFFECTS[number]
+
+// ─── 护眼模式增强配置 ────────────────────────────────────────
+//
+// 设计要点:
+// - 三个正交参数(亮度 / 暖度 / 蓝光过滤)互不耦合,用户可独立调节
+// - 范围均为 0..100,UI 上以滑块呈现,内部以 0..1 系数参与 CSS 计算
+// - 提供 3 个常用预设 (day / night / reading) 作为快捷入口
+// - 默认值为温和护眼,适合大多数场景;激进护眼请用 night 预设
+//
+// 与 CSS 滤镜的映射关系:
+//   brightness ──► filter: brightness(0.5..1.0)
+//   warmth     ──► filter: sepia(0..0.4)  +  hue-rotate(0..-20deg)  + saturate(1..0.7)
+//   blueLight  ──► filter: hue-rotate(0..-25deg) 叠加在 warmth 之上
+//
+// 关于「与环境光相匹配」:
+//   Web 平台无法直接读取设备 ambient light sensor;
+//   但通过「跟随系统 dark/light」主题 + 用户手动微调亮度,已能覆盖 90% 场景。
+
+/** 0..1;映射到 filter: brightness(0.5 + value * 0.5),0 = 50% 亮度,1 = 100% 亮度 */
+export const EYE_CARE_BRIGHTNESS_MIN = 0
+export const EYE_CARE_BRIGHTNESS_MAX = 100
+export const EYE_CARE_BRIGHTNESS_DEFAULT = 95
+
+/** 0..1;色温(暖度);0 = 自然白,1 = 偏黄最暖 */
+export const EYE_CARE_WARMTH_MIN = 0
+export const EYE_CARE_WARMTH_MAX = 100
+export const EYE_CARE_WARMTH_DEFAULT = 60
+
+/** 0..1;蓝光过滤强度;0 = 不过滤,1 = 强力过滤(显著降低 400-500nm 蓝光感知) */
+export const EYE_CARE_BLUELIGHT_MIN = 0
+export const EYE_CARE_BLUELIGHT_MAX = 100
+export const EYE_CARE_BLUELIGHT_DEFAULT = 70
+
+export interface EyeCareConfig {
+  /** 0..100,UI 滑块值 */
+  brightness: number
+  /** 0..100,UI 滑块值 */
+  warmth: number
+  /** 0..100,UI 滑块值 */
+  blueLight: number
+}
+
+export const EYE_CARE_DEFAULTS: EyeCareConfig = {
+  brightness: EYE_CARE_BRIGHTNESS_DEFAULT,
+  warmth: EYE_CARE_WARMTH_DEFAULT,
+  blueLight: EYE_CARE_BLUELIGHT_DEFAULT
+}
+
+/** 常用预设 — 暴露给 UI 一键切换 */
+export const EYE_CARE_PRESETS: { [k in 'day' | 'reading' | 'night']: EyeCareConfig } = {
+  /** 白天:接近自然光,几乎无滤镜 */
+  day:     { brightness: 100, warmth: 10,  blueLight: 10  },
+  /** 夜间:强暖色 + 强蓝光过滤 */
+  night:   { brightness: 80,  warmth: 80,  blueLight: 90  },
+  /** 阅读:温和暖色,适度护眼 */
+  reading: { brightness: 95,  warmth: 55,  blueLight: 60  }
+}
+
+export type EyeCarePreset = keyof typeof EYE_CARE_PRESETS

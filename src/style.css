@@ -8,6 +8,18 @@
     --safe-area-right: env(safe-area-inset-right, 0);
     --safe-area-bottom: env(safe-area-inset-bottom, 0);
     --safe-area-left: env(safe-area-inset-left, 0);
+
+    /* ─── 护眼模式 CSS 变量(由 settings store 动态写入) ──────── */
+    /* 默认「关闭」状态:中性滤镜;开启后由 store 覆盖这些值 */
+    --eye-care-filter:
+      brightness(1)
+      sepia(0)
+      hue-rotate(0deg)
+      saturate(1);
+    --eye-care-body-bg: #f8fafc;
+  }
+  html.dark {
+    --eye-care-body-bg: #0f172a;
   }
 
   html, body, #app {
@@ -64,21 +76,21 @@
     -webkit-tap-highlight-color: transparent;
   }
 
-  /* ─── 护眼模式(暖色滤镜) ─────────────────────── */
-  .eye-care {
-    /* 暖色滤镜,降低蓝光强度 */
-    filter: sepia(0.18) saturate(0.92) hue-rotate(-8deg) brightness(0.99);
-    background-color: #f6efe0;
+  /* ─── 护眼模式(CSS 变量驱动,可动态调节) ────────
+   * 三个旋钮:
+   *   --eye-care-filter  滤镜组合(亮度/暖度/蓝光过滤)
+   *   --eye-care-body-bg 背景色
+   * 这两个变量由 settings store 在 eyeCare 开启时实时写入。
+   * 关闭时它们保持「关闭」的中性值,无视觉副作用。
+   */
+  html.eye-care {
+    filter: var(--eye-care-filter);
   }
-  html.dark .eye-care,
-  .dark.eye-care {
-    /* 深色 + 护眼:更暖的暗色背景 */
-    background-color: #2a2218;
-    filter: sepia(0.22) saturate(0.85) hue-rotate(-10deg) brightness(0.96);
+  html.eye-care body {
+    /* 同时更新 body 背景,避免被 #app 覆盖 */
+    background-color: var(--eye-care-body-bg);
   }
-  .eye-care body {
-    background-color: #f6efe0;
-  }
+  /* 让卡片、滑块等也染上轻微暖意(由 filter 自然产生,无需额外 class) */
 
   /* ─── 视觉特效:正确点击 ──────────────────────── */
   .fx-pop {

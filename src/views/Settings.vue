@@ -5,6 +5,7 @@ import { useSettingsStore, type AgeGroup, type Theme } from '@/stores/settings'
 import { useHistoryStore } from '@/stores/history'
 import { DEFAULT_PALETTE } from '@/utils/colorPalette'
 import type { CellShape, CellStyle, Effect, SoundPack } from '@/types'
+import type { EyeCarePreset } from '@/types'
 import { t, locale, setLocale, SUPPORTED_LOCALES, LOCALE_LABELS, type Locale } from '@/i18n'
 
 const router = useRouter()
@@ -52,6 +53,12 @@ const effectOptions = computed<Array<{ value: Effect; label: string }>>(() => [
   { value: 'all',   label: t('settings.effects.all') }
 ])
 
+const eyeCarePresets = computed<Array<{ value: EyeCarePreset; label: string; desc: string }>>(() => [
+  { value: 'day',     label: t('settings.eyeCarePreset.day'),     desc: t('settings.eyeCarePreset.dayDesc') },
+  { value: 'reading', label: t('settings.eyeCarePreset.reading'), desc: t('settings.eyeCarePreset.readingDesc') },
+  { value: 'night',   label: t('settings.eyeCarePreset.night'),   desc: t('settings.eyeCarePreset.nightDesc') }
+])
+
 function toggleColor(id: string) {
   settings.togglePaletteColor(id)
 }
@@ -69,6 +76,19 @@ async function clearData() {
 function changeLocale(e: Event) {
   const v = (e.target as HTMLSelectElement).value as Locale
   setLocale(v)
+}
+
+function pickPreset(p: EyeCarePreset) {
+  settings.applyEyeCarePreset(p)
+  // 一键应用预设时同步开启护眼模式
+  settings.eyeCare = true
+}
+
+function onSliderInput(field: 'brightness' | 'warmth' | 'blueLight', e: Event) {
+  const v = Number((e.target as HTMLInputElement).value)
+  settings.eyeCareConfig = { ...settings.eyeCareConfig, [field]: v }
+  // 滑动任一滑块时自动开启护眼
+  settings.eyeCare = true
 }
 </script>
 
@@ -121,13 +141,78 @@ function changeLocale(e: Event) {
       <section>
         <h2 class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">{{ t('settings.behavior') }}</h2>
         <div class="card divide-y divide-slate-200 dark:divide-slate-800">
-          <label class="flex items-center justify-between p-4 cursor-pointer">
-            <div>
-              <div class="font-medium">{{ t('settings.eyeCare') }}</div>
-              <div class="text-xs text-slate-500 dark:text-slate-400">{{ t('settings.eyeCareDesc') }}</div>
+          <!-- 护眼模式主开关 + 增强调节 -->
+          <div class="p-4">
+            <label class="flex items-center justify-between cursor-pointer">
+              <div>
+                <div class="font-medium">{{ t('settings.eyeCare') }}</div>
+                <div class="text-xs text-slate-500 dark:text-slate-400">{{ t('settings.eyeCareDesc') }}</div>
+              </div>
+              <input type="checkbox" v-model="settings.eyeCare" class="w-5 h-5 accent-primary-500" />
+            </label>
+
+            <!-- 预设按钮(白天 / 阅读 / 夜间) -->
+            <div class="mt-3 grid grid-cols-3 gap-2">
+              <button
+                v-for="p in eyeCarePresets"
+                :key="p.value"
+                @click="pickPreset(p.value)"
+                :title="p.desc"
+                class="px-2 py-1.5 text-xs rounded-lg border transition-all
+                       bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800
+                       hover:border-primary-500 hover:text-primary-500 active:scale-95"
+              >{{ p.label }}</button>
             </div>
-            <input type="checkbox" v-model="settings.eyeCare" class="w-5 h-5 accent-primary-500" />
-          </label>
+
+            <!-- 三个滑块(亮度 / 暖度 / 蓝光过滤) -->
+            <div class="mt-4 space-y-3" :class="{ 'opacity-50 pointer-events-none': !settings.eyeCare }">
+              <!-- 亮度 -->
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-sm">{{ t('settings.eyeCareBrightness') }}</span>
+                  <span class="text-xs text-slate-500 dark:text-slate-400 tabular-nums">{{ settings.eyeCareConfig.brightness }}%</span>
+                </div>
+                <input
+                  type="range" min="50" max="100" step="1"
+                  :value="settings.eyeCareConfig.brightness"
+                  @input="(e) => onSliderInput('brightness', e)"
+                  class="w-full accent-primary-500"
+                />
+              </div>
+              <!-- 暖度 -->
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-sm">{{ t('settings.eyeCareWarmth') }}</span>
+                  <span class="text-xs text-slate-500 dark:text-slate-400 tabular-nums">{{ settings.eyeCareConfig.warmth }}%</span>
+                </div>
+                <input
+                  type="range" min="0" max="100" step="1"
+                  :value="settings.eyeCareConfig.warmth"
+                  @input="(e) => onSliderInput('warmth', e)"
+                  class="w-full accent-primary-500"
+                />
+              </div>
+              <!-- 蓝光过滤 -->
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-sm">{{ t('settings.eyeCareBlueLight') }}</span>
+                  <span class="text-xs text-slate-500 dark:text-slate-400 tabular-nums">{{ settings.eyeCareConfig.blueLight }}%</span>
+                </div>
+                <input
+                  type="range" min="0" max="100" step="1"
+                  :value="settings.eyeCareConfig.blueLight"
+                  @input="(e) => onSliderInput('blueLight', e)"
+                  class="w-full accent-primary-500"
+                />
+              </div>
+            </div>
+
+            <!-- 重置按钮 -->
+            <button
+              @click="settings.resetEyeCare"
+              class="mt-3 text-xs text-primary-500 hover:underline"
+            >{{ t('settings.eyeCareReset') }}</button>
+          </div>
         </div>
       </section>
 
