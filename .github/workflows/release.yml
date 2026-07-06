@@ -376,18 +376,31 @@ jobs:
           set RUST_BACKTRACE=1
           echo === rustup show ===
           rustup show
-          echo === running tauri build ===
-          call npm run tauri:build > build-windows.log 2>&1
+          echo === running tauri build (msi + nsis) ===
+          call npx tauri build --bundles msi nsis > build-windows.log 2>&1
           echo === build exit: %ERRORLEVEL% ===
           type build-windows.log
+          echo === bundle dir listing ===
+          if exist src-tauri\target\release\bundle (
+            dir /s /b src-tauri\target\release\bundle 2>nul
+          ) else (
+            echo NO BUNDLE DIR FOUND
+          )
           exit /b %ERRORLEVEL%
 
       - name: List bundle outputs
         if: always()
         shell: pwsh
         run: |
+          Write-Host "--- bundle dir ---"
           if (Test-Path src-tauri/target/release/bundle) {
             Get-ChildItem src-tauri/target/release/bundle -Recurse -File | Select-Object -First 30 | ForEach-Object { $_.FullName }
+          } else {
+            Write-Host "Bundle directory does not exist"
+          }
+          Write-Host "--- target/release dir ---"
+          if (Test-Path src-tauri/target/release) {
+            Get-ChildItem src-tauri/target/release -Filter "*.exe" | ForEach-Object { $_.FullName }
           }
 
       - name: Upload logs (workflow)
@@ -757,13 +770,14 @@ jobs:
           CI: 'true'
         run: |
           set -o pipefail
-          npx tauri build --no-bundle --target aarch64-apple-ios 2>&1 | tee build-ios.log
+          # --bundles app: 只生成 .app,不生成需要签名的 .ipa
+          npx tauri build --bundles app --target aarch64-apple-ios 2>&1 | tee build-ios.log
 
       - name: List .app outputs
         if: always()
         run: |
           echo "--- find .app ---"
-          find src-tauri/target -name "*.app" -maxdepth 6 2>/dev/null | head -10
+          find src-tauri/target -name "*.app" 2>/dev/null | head -10
           echo "--- end ---"
 
       - name: Upload logs (workflow)
