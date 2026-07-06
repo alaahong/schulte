@@ -18,6 +18,11 @@ src-tauri/gen/
 # PWA
 dev-dist/
 
+# WeChat Mini Program — 个人配置(包含 AppID)
+miniprogram/project.private.config.json
+miniprogram/miniprogram_npm/
+miniprogram/node_modules/
+
 # 比赛 / 临时验证文件
 docs/competition/verify-*.png
 docs/competition/verify-*.jpg

@@ -53,6 +53,15 @@ jobs:
         # 防止 GitHub Pages 忽略下划线开头的文件 (PWA service worker 路径需要)
         run: touch dist/.nojekyll
 
+      - name: Package WeChat Mini Program
+        # 把 miniprogram 源码打成 zip 作为 workflow artifact 下载
+        # 微信开发者工具导入这个 zip 即可预览/上传
+        run: |
+          cd miniprogram
+          # 排除个人私有配置
+          zip -r ../schulte-miniprogram.zip . -x "project.private.config.json" "node_modules/*" "miniprogram_npm/*"
+          cd ..
+
       - name: Deploy to gh-pages branch
         uses: peaceiris/actions-gh-pages@v4
         with:
@@ -65,3 +74,11 @@ jobs:
           user_name: 'github-actions[bot]'
           user_email: 'github-actions[bot]@users.noreply.github.com'
           commit_message: 'deploy: ${{ github.event.head_commit.message }}'
+
+      - name: Upload Mini Program artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: schulte-miniprogram
+          path: schulte-miniprogram.zip
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,0 +1,22 @@
+<!--
+  唯一页面: 内嵌 web-view 加载已部署的 H5 应用
+  - default-url: 用户的自定义域名(已在 GitHub Pages 配置)
+  - fallback-url: 备用,GitHub Pages 默认域名(在国内可能更稳)
+  - 切换: 修改 index.js 即可
+-->
+<view class="container">
+  <web-view
+    src="{{url}}"
+    bindload="onLoad"
+    binderror="onError"
+  ></web-view>
+
+  <!-- 加载提示: web-view 内部已 loading,这里只覆盖极慢的初次打开 -->
+  <view class="hint" wx:if="{{hint}}" bindtap="hideHint">
+    <view class="hint-card">
+      <view class="hint-title">{{hintTitle}}</view>
+      <view class="hint-body">{{hintBody}}</view>
+      <view class="hint-action">点击关闭</view>
+    </view>
+  </view>
+</view>

@@ -21,7 +21,8 @@
     "tauri:android:build": "tauri android build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "miniprogram:open": "node scripts/open-miniprogram.mjs"
   },
   "dependencies": {
     "dexie": "^4.0.10",
