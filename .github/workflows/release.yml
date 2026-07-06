@@ -1,13 +1,19 @@
 # 跨平台构建 + 自动发布
 # 触发:push tag v* / 手动 workflow_dispatch
-# 流程:
-#   1. 6 个独立 job 并行构建(Linux / Windows / macOS-arm64 / macOS-x64 / Android / iOS)
-#   2. 每个 job 自己跑 `npm run tauri:build`(或对应 mobile 子命令)产 bundle
-#   3. 通过 softprops/action-gh-release@v2 上传产物到当前 tag 对应的 GitHub Release(草稿)
+#
+# 流程 (顺序):
+#   1. preflight   - typecheck + unit tests (代码质量门禁,失败直接终止发布)
+#   2. create-release - 抢先创建 draft Release(消除 6 个 job 并发创建 release 的竞态)
+#   3. linux / windows / macos-arm64 / macos-x64 / android / ios
+#                     并行构建,产物上传到已存在的 release
+#   4. finalize     - 汇总构建状态到 Step Summary
+#
 # 关键点:
-#   - 使用 `set -o pipefail` 让 pipe 中的真实错误不被 tee 屏蔽
-#   - 移动端 (Android/iOS) 必须先 `tauri mobile init` 再 `tauri mobile build`
+#   - create-release 必须先于所有构建 job,确保 release 存在
+#   - softprops/action-gh-release@v2 在 release 已存在时只上传文件
+#   - 移动端 (Android/iOS) 必须先 `tauri mobile init` 再 build
 #   - 修复 tauri.conf.json 中 iOS 必须是 `iOS`(大写),Android 不能有 `targetSdkVersion`
+#   - 启用 generate_release_notes 自动生成 changelog
 name: Release Build
 
 on:
@@ -30,10 +36,89 @@ env:
 
 jobs:
   # ============================================================
+  # Preflight: 质量门禁 (typecheck + 单元测试 + web 端构建)
+  # 失败时直接终止整个 release 流程
+  # ============================================================
+  preflight:
+    name: Preflight (typecheck + tests)
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Generate PWA icons (web)
+        run: npm run prebuild
+
+      - name: Type check (vue-tsc)
+        run: npx vue-tsc --noEmit
+
+      - name: Unit tests (vitest)
+        run: npm test
+
+      - name: Web build (sanity)
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: npx vite build
+
+  # ============================================================
+  # Create Release: 抢先创建 draft Release
+  # 所有构建 job 都依赖本 job,确保 release 已存在
+  # ============================================================
+  create-release:
+    name: Create Release
+    if: github.ref_type == 'tag'
+    needs: preflight
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.id }}
+      upload_url: ${{ steps.create.outputs.upload_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create draft GitHub Release
+        id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Schulte ${{ github.ref_name }}
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          # 不在创建步骤里附加文件,所有文件由后续构建 job 上传
+
+      - name: Verify release was created
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          echo "Release ID: ${{ steps.create.outputs.id }}"
+          echo "Upload URL: ${{ steps.create.outputs.upload_url }}"
+          echo "Tag: ${TAG}"
+          if [ -z "${{ steps.create.outputs.id }}" ]; then
+            echo "##[error]Release was not created (id is empty)"
+            exit 1
+          fi
+          echo "## Release created successfully ✅" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================
   # Linux 桌面
   # ============================================================
   linux:
     name: Linux (.deb / .AppImage)
+    needs: create-release
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -117,9 +202,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Schulte v${{ github.ref_name }}
-          draft: true
-          prerelease: false
           files: |
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
@@ -140,6 +222,7 @@ jobs:
   # ============================================================
   windows:
     name: Windows (.msi / .exe)
+    needs: create-release
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -175,11 +258,8 @@ jobs:
             $vcvars = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
           }
           Write-Host "vcvars: $vcvars"
-          # Save vcvars path to step output AND env so later steps can source it
           "msvc_vcvars=$vcvars" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "MSVC_VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          # Also load env vars into the current process so Verify Tauri CLI can confirm them
-          # Use `&` (unconditional) so a non-zero vcvars exit doesn't skip `set`
           cmd.exe /c "`"$vcvars`" >nul & set" | ForEach-Object {
             if ($_ -match '^([^=]+)=(.*)$') {
               [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
@@ -227,7 +307,6 @@ jobs:
           npx tauri --version
           rustup show
           rustc --version
-          # Source vcvars then verify (don't fail on missing tool)
           cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && (where.exe link.exe & where.exe cl.exe)"
 
       - name: Generate Tauri icons
@@ -235,7 +314,6 @@ jobs:
         env:
           MSVC_VCVARS: ${{ steps.msvc.outputs.msvc_vcvars }}
         run: |
-          # Source vcvars then run npm script
           cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && npm run icons:tauri"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -284,9 +362,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Schulte v${{ github.ref_name }}
-          draft: true
-          prerelease: false
           files: |
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
@@ -307,6 +382,7 @@ jobs:
   # ============================================================
   macos-arm64:
     name: macOS arm64 (.dmg)
+    needs: create-release
     runs-on: macos-14
     steps:
       - name: Checkout
@@ -371,9 +447,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Schulte v${{ github.ref_name }}
-          draft: true
-          prerelease: false
           files: |
             src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
             src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
@@ -394,6 +467,7 @@ jobs:
   # ============================================================
   macos-x64:
     name: macOS x64 (.dmg)
+    needs: create-release
     runs-on: macos-14
     steps:
       - name: Checkout
@@ -458,9 +532,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Schulte v${{ github.ref_name }}
-          draft: true
-          prerelease: false
           files: |
             src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
             src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
@@ -481,6 +552,7 @@ jobs:
   # ============================================================
   android:
     name: Android (.apk)
+    needs: create-release
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
@@ -571,9 +643,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Schulte v${{ github.ref_name }}
-          draft: true
-          prerelease: false
           files: |
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
             src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
@@ -594,6 +663,7 @@ jobs:
   # ============================================================
   ios:
     name: iOS (.app unsigned)
+    needs: create-release
     runs-on: macos-14
     steps:
       - name: Checkout
@@ -668,9 +738,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          name: Schulte v${{ github.ref_name }}
-          draft: true
-          prerelease: false
           files: |
             src-tauri/target/**/*.app
           fail_on_unmatched_files: false
@@ -685,7 +752,7 @@ jobs:
           if-no-files-found: ignore
 
   # ============================================================
-  # 收尾
+  # 收尾: 汇总所有平台构建状态
   # ============================================================
   finalize:
     name: Finalize Release
@@ -709,3 +776,5 @@ jobs:
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "Release: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "_Release is created as draft. After all builds succeed, publish from the Releases page._" >> $GITHUB_STEP_SUMMARY
