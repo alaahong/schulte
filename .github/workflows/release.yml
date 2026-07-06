@@ -152,6 +152,7 @@ jobs:
           cache: 'npm'
 
       - name: Setup MSVC environment
+        id: msvc
         shell: pwsh
         run: |
           Write-Host "--- Looking for Visual Studio ---"
@@ -174,8 +175,10 @@ jobs:
             $vcvars = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
           }
           Write-Host "vcvars: $vcvars"
-          Write-Host "--- Loading vcvars ---"
-          cmd.exe /c "`"$vcvars`" && set" | ForEach-Object {
+          # Save vcvars path to GITHUB_ENV so later steps can source it
+          "MSVC_VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # Also load env vars into the current process so Verify Tauri CLI can confirm them
+          cmd.exe /c "`"$vcvars`" >nul && set" | ForEach-Object {
             if ($_ -match '^([^=]+)=(.*)$') {
               [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
             }
@@ -214,24 +217,35 @@ jobs:
 
       - name: Verify Tauri CLI
         shell: pwsh
+        env:
+          MSVC_VCVARS: ${{ steps.msvc.outputs.MSVC_VCVARS }}
         run: |
           node --version
           npx tauri --version
           rustup show
           rustc --version
-          link.exe 2>&1 | Select-Object -First 2
+          # Source vcvars then verify
+          cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && where.exe link.exe && where.exe cl.exe"
 
       - name: Generate Tauri icons
-        run: npm run icons:tauri
+        shell: pwsh
+        env:
+          MSVC_VCVARS: ${{ steps.msvc.outputs.MSVC_VCVARS }}
+        run: |
+          # Source vcvars then run npm script
+          cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && npm run icons:tauri"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Tauri (Windows)
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Continue'
-          npm run tauri:build 2>&1 | Tee-Object -FilePath build-windows.log
-          exit $LASTEXITCODE
         env:
+          MSVC_VCVARS: ${{ steps.msvc.outputs.MSVC_VCVARS }}
           CI: 'true'
+        run: |
+          Write-Host "--- vcvars: $env:MSVC_VCVARS ---"
+          # Wrap entire build inside a single cmd.exe so vcvars env propagates to tauri/cargo
+          cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && npm run tauri:build 2>&1" | Tee-Object -FilePath build-windows.log
+          exit $LASTEXITCODE
 
       - name: List bundle outputs
         if: always()
