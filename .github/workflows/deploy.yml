@@ -1,6 +1,11 @@
 # GitHub Pages 自动部署
 # 触发:push 到 main / 手动触发
-# 流程:checkout → setup node → npm ci → build → 上传 dist/ → 部署到 Pages
+# 流程:checkout → setup node → npm ci → build → 推送 dist/ 到 gh-pages 分支
+#
+# 为什么不走 actions/deploy-pages (官方 Pages 部署):
+#   默认 github-pages 环境对 main 分支有保护规则,
+#   "Branch 'main' is not allowed to deploy to github-pages due to environment protection rules"
+#   直接推 gh-pages 分支绕开此限制,适合任意仓库直接可用。
 name: Deploy to GitHub Pages
 
 on:
@@ -14,9 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 # 不在 fork 的 PR 上跑(保护 token)
 jobs:
@@ -29,7 +32,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -42,21 +45,23 @@ jobs:
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
+      - name: Copy 404.html for SPA routing
+        # vite.config 不在 dist/ 输出 404.html;手动拷贝
+        run: cp public/404.html dist/404.html
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Setup .nojekyll
+        # 防止 GitHub Pages 忽略下划线开头的文件 (PWA service worker 路径需要)
+        run: touch dist/.nojekyll
+
+      - name: Deploy to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: ./dist
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          force_orphan: true
+          # 仓库名提供时走 Pages 子路径;本机构建时默认 /
+          # cname: example.com   # 如需自定义域名,取消注释
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'deploy: ${{ github.event.head_commit.message }}'
