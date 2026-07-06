@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useSettingsStore, type AgeGroup, type Theme } from '@/stores/settings'
 import { useHistoryStore } from '@/stores/history'
 import { DEFAULT_PALETTE } from '@/utils/colorPalette'
-import type { CellShape, CellStyle } from '@/types'
+import type { CellShape, CellStyle, Effect, SoundPack } from '@/types'
 import { t, locale, setLocale, SUPPORTED_LOCALES, LOCALE_LABELS, type Locale } from '@/i18n'
 
 const router = useRouter()
@@ -33,6 +33,23 @@ const cellShapes = computed<Array<{ value: CellShape; label: string; desc: strin
   { value: 'rounded',   label: t('shapes.rounded'),   desc: t('shapes.roundedDesc') },
   { value: 'circle',    label: t('shapes.circle'),    desc: t('shapes.circleDesc') },
   { value: 'irregular', label: t('shapes.irregular'), desc: t('shapes.irregularDesc') }
+])
+
+const soundPackOptions = computed<Array<{ value: SoundPack; label: string }>>(() => [
+  { value: 'none',    label: t('settings.soundPack.none') },
+  { value: 'classic', label: t('settings.soundPack.classic') },
+  { value: 'bubu',    label: t('settings.soundPack.bubu') },
+  { value: 'duang',   label: t('settings.soundPack.duang') },
+  { value: 'gangan',  label: t('settings.soundPack.gangan') },
+  { value: 'all',     label: t('settings.soundPack.all') }
+])
+
+const effectOptions = computed<Array<{ value: Effect; label: string }>>(() => [
+  { value: 'none',  label: t('settings.effects.none') },
+  { value: 'shake', label: t('settings.effects.shake') },
+  { value: 'pop',   label: t('settings.effects.pop') },
+  { value: 'burst', label: t('settings.effects.burst') },
+  { value: 'all',   label: t('settings.effects.all') }
 ])
 
 function toggleColor(id: string) {
@@ -96,6 +113,48 @@ function changeLocale(e: Event) {
             class="w-full bg-transparent border-0 text-base font-medium focus:outline-none cursor-pointer"
           >
             <option v-for="l in SUPPORTED_LOCALES" :key="l" :value="l">{{ LOCALE_LABELS[l] }}</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- 护眼 / 音效 / 视觉特效 -->
+      <section>
+        <h2 class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">{{ t('settings.behavior') }}</h2>
+        <div class="card divide-y divide-slate-200 dark:divide-slate-800">
+          <label class="flex items-center justify-between p-4 cursor-pointer">
+            <div>
+              <div class="font-medium">{{ t('settings.eyeCare') }}</div>
+              <div class="text-xs text-slate-500 dark:text-slate-400">{{ t('settings.eyeCareDesc') }}</div>
+            </div>
+            <input type="checkbox" v-model="settings.eyeCare" class="w-5 h-5 accent-primary-500" />
+          </label>
+        </div>
+      </section>
+
+      <!-- 音效包 -->
+      <section>
+        <h2 class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">{{ t('settings.soundPack') }}</h2>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">{{ t('settings.soundPackHint') }}</p>
+        <div class="card p-3">
+          <select
+            v-model="settings.soundPack"
+            class="w-full bg-transparent border-0 text-base font-medium focus:outline-none cursor-pointer"
+          >
+            <option v-for="o in soundPackOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- 视觉特效 -->
+      <section>
+        <h2 class="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">{{ t('settings.effects') }}</h2>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">{{ t('settings.effectsHint') }}</p>
+        <div class="card p-3">
+          <select
+            v-model="settings.effects"
+            class="w-full bg-transparent border-0 text-base font-medium focus:outline-none cursor-pointer"
+          >
+            <option v-for="o in effectOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
           </select>
         </div>
       </section>

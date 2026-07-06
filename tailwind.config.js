@@ -24,7 +24,9 @@ export default {
       animation: {
         'fade-in': 'fadeIn 0.2s ease-out',
         'pulse-fast': 'pulse 0.4s ease-in-out',
-        'shake': 'shake 0.3s ease-in-out'
+        'shake': 'shake 0.3s ease-in-out',
+        'cell-pop': 'cellPop 0.32s ease-out',
+        'cell-burst': 'cellBurst 0.42s ease-out'
       },
       keyframes: {
         fadeIn: {
@@ -35,6 +37,17 @@ export default {
           '0%, 100%': { transform: 'translateX(0)' },
           '25%': { transform: 'translateX(-4px)' },
           '75%': { transform: 'translateX(4px)' }
+        },
+        cellPop: {
+          '0%':   { transform: 'scale(1)' },
+          '35%':  { transform: 'scale(1.18)' },
+          '70%':  { transform: 'scale(0.94)' },
+          '100%': { transform: 'scale(1)' }
+        },
+        cellBurst: {
+          '0%':   { transform: 'scale(1)',    filter: 'brightness(1)' },
+          '40%':  { transform: 'scale(1.12)', filter: 'brightness(1.3)' },
+          '100%': { transform: 'scale(1)',    filter: 'brightness(1)' }
         }
       }
     }

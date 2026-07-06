@@ -76,3 +76,24 @@ export type Rating = 'excellent' | 'good' | 'fair' | 'poor'
 // 网格尺寸选项
 export const GRID_SIZES = [3, 4, 5, 6, 7, 8] as const
 export type GridSize = typeof GRID_SIZES[number]
+
+// 音效包(训练行为反馈音,默认 none 不发声音)
+export const SOUND_PACKS = [
+  'none',     // 无声
+  'classic',  // 经典 beep
+  'bubu',     // biu biu biu 高频短促
+  'duang',    // duang duang duang 低频厚实
+  'gangan',   // gang gang gang 中频明亮
+  'all'       // 自动轮换使用以上所有包
+] as const
+export type SoundPack = typeof SOUND_PACKS[number]
+
+// 视觉特效(点击正确时的动画,默认 none 不发特效)
+export const EFFECTS = [
+  'none',   // 无特效
+  'shake',  // 轻微抖动
+  'pop',    // 缩放弹出
+  'burst',  // 粒子爆开
+  'all'     // 同时启用以上所有
+] as const
+export type Effect = typeof EFFECTS[number]

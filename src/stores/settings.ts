@@ -1,10 +1,10 @@
 /**
- * 设置 Store:主题、年龄段、严苛模式、音效、中心点、色彩训练配置
+ * 设置 Store:主题、年龄段、严苛模式、音效、特效、护眼模式、色彩训练配置
  */
 import { defineStore } from 'pinia'
 import { ref, watch } from 'vue'
 import { ALL_COLOR_IDS, normalizePaletteIds } from '@/utils/colorPalette'
-import type { CellShape, CellStyle } from '@/types'
+import type { CellShape, CellStyle, Effect, SoundPack } from '@/types'
 
 export type Theme = 'light' | 'dark' | 'auto'
 export type AgeGroup = '7-12' | '12-17' | '18+'
@@ -27,6 +27,12 @@ interface PersistedSettings {
   cellStyle: CellStyle
   /** 单元格形状(默认 square=圆角方,可切 rounded/circle/irregular) */
   cellShape: CellShape
+  /** 护眼模式(暖色滤镜) */
+  eyeCare: boolean
+  /** 音效包(none/classic/bubu/duang/gangan/all),默认 none */
+  soundPack: SoundPack
+  /** 视觉特效(none/shake/pop/burst/all),默认 none */
+  effects: Effect
 }
 
 function loadSettings(): PersistedSettings {
@@ -34,7 +40,11 @@ function loadSettings(): PersistedSettings {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
-      return { ...defaultSettings, ...parsed, colorPalette: normalizePaletteIds(parsed.colorPalette) }
+      return {
+        ...defaultSettings,
+        ...parsed,
+        colorPalette: normalizePaletteIds(parsed.colorPalette)
+      }
     }
   } catch { /* ignore */ }
   return { ...defaultSettings }
@@ -51,7 +61,10 @@ const defaultSettings: PersistedSettings = {
   colorPalette: [...ALL_COLOR_IDS],
   highlightOnClick: true,
   cellStyle: 'solid',
-  cellShape: 'square'
+  cellShape: 'square',
+  eyeCare: false,
+  soundPack: 'none',
+  effects: 'none'
 }
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -68,14 +81,18 @@ export const useSettingsStore = defineStore('settings', () => {
   const highlightOnClick = ref<boolean>(initial.highlightOnClick)
   const cellStyle = ref<CellStyle>(initial.cellStyle)
   const cellShape = ref<CellShape>(initial.cellShape)
+  const eyeCare = ref<boolean>(initial.eyeCare)
+  const soundPack = ref<SoundPack>(initial.soundPack)
+  const effects = ref<Effect>(initial.effects)
 
-  // 应用主题
+  // 应用主题 + 护眼
   function applyTheme() {
     const root = document.documentElement
     const isDark =
       theme.value === 'dark' ||
       (theme.value === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
     root.classList.toggle('dark', isDark)
+    root.classList.toggle('eye-care', eyeCare.value)
     const meta = document.querySelector('meta[name="theme-color"]') as HTMLMetaElement | null
     if (meta) meta.content = isDark ? '#0f172a' : '#0ea5e9'
   }
@@ -101,7 +118,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   // 持久化
   watch(
-    [theme, ageGroup, strictMode, soundEnabled, showCenterDot, hapticEnabled, keepAwake, colorPalette, highlightOnClick, cellStyle, cellShape],
+    [theme, ageGroup, strictMode, soundEnabled, showCenterDot, hapticEnabled, keepAwake, colorPalette, highlightOnClick, cellStyle, cellShape, eyeCare, soundPack, effects],
     () => {
       const payload: PersistedSettings = {
         theme: theme.value,
@@ -114,7 +131,10 @@ export const useSettingsStore = defineStore('settings', () => {
         colorPalette: colorPalette.value,
         highlightOnClick: highlightOnClick.value,
         cellStyle: cellStyle.value,
-        cellShape: cellShape.value
+        cellShape: cellShape.value,
+        eyeCare: eyeCare.value,
+        soundPack: soundPack.value,
+        effects: effects.value
       }
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
@@ -127,6 +147,8 @@ export const useSettingsStore = defineStore('settings', () => {
   return {
     theme, ageGroup, strictMode, soundEnabled, showCenterDot, hapticEnabled, keepAwake,
     colorPalette, highlightOnClick, cellStyle, cellShape,
+    eyeCare, soundPack, effects,
     applyTheme, togglePaletteColor, resetPalette
   }
 })
+

@@ -137,6 +137,17 @@ const currentTargetColor = computed(() => {
   return getColorById(id)
 })
 
+// 单元格的视觉特效 class(fxCell 与 game.lastFxCell 对应则加对应 class)
+function cellFxClass(cell: { row: number; col: number }): string {
+  const fx = game.lastFxCell
+  if (!fx) return ''
+  if (fx.row !== cell.row || fx.col !== cell.col) return ''
+  if (fx.effect === 'shake') return 'animate-shake'
+  if (fx.effect === 'pop')   return 'fx-pop animate-cell-pop'
+  if (fx.effect === 'burst') return 'fx-burst animate-cell-burst'
+  return ''
+}
+
 // 单元格 cell 基础样式(不含 completed/wrong 状态)
 function cellBaseClass(cell: { value: number | string; color?: string; bg?: string }) {
   if (mode.value === 'color' && cell.color) {
@@ -255,6 +266,7 @@ function cellColorLetter(colorId: string | undefined): string {
               'relative font-bold flex items-center justify-center transition-all',
               cellShapeClass(cell),
               fontSizeClass,
+              cellFxClass(cell),
               cell.completed ? cellCompletedClass() : cellBaseClass(cell),
               game.wrongCell && game.wrongCell.row === cell.row && game.wrongCell.col === cell.col
                 ? '!bg-rose-500 !text-white animate-shake'

@@ -3,10 +3,11 @@
  */
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { Cell, CellShape, GameMode, GridSize } from '@/types'
+import type { Cell, CellShape, Effect, GameMode, GridSize } from '@/types'
 import { generateGorbovGrid, generateNumberGrid } from '@/utils/shuffle'
 import { buildTargetSequence } from '@/utils/mode'
 import { getColorById } from '@/utils/colorPalette'
+import { playSound } from '@/utils/sound'
 import { useSettingsStore } from './settings'
 
 export type GameStatus = 'idle' | 'ready' | 'running' | 'paused' | 'finished'
@@ -37,8 +38,13 @@ export const useGameStore = defineStore('game', () => {
   const mistakes = ref(0)
   const wrongCell = ref<{ row: number; col: number } | null>(null)
 
+  // 特效:记录最近一次正确点击的格子 + 触发的特效名
+  // Play.vue 监听此 ref,加 class 后再清除,即可反复触发 CSS 动画
+  const lastFxCell = ref<{ row: number; col: number; effect: Effect; seq: number } | null>(null)
+
   let rafId: number | null = null
   let wrongTimeout: number | null = null
+  let fxSeq = 0
 
   // ─── 计时器 ─────────────────────────────────────────
   function tick() {
@@ -176,6 +182,7 @@ export const useGameStore = defineStore('game', () => {
     finishedAt.value = null
     durationMs.value = 0
     wrongCell.value = null
+    lastFxCell.value = null
     status.value = 'ready'
   }
 
@@ -191,6 +198,25 @@ export const useGameStore = defineStore('game', () => {
   }
 
   // ─── 点击处理 ───────────────────────────────────────
+  /**
+   * 根据当前 settings.effects 选择本次正确点击触发的视觉特效。
+   * - 'none' 不触发
+   * - 'all'  在 shake / pop / burst 之间随机(不放回,均匀循环)
+   * - 其他   直接使用
+   */
+  let fxCursor = 0
+  const fxPool: Effect[] = ['shake', 'pop', 'burst']
+  function pickEffect(): Effect {
+    const e = settings.effects
+    if (e === 'none') return 'none'
+    if (e === 'all') {
+      const r = fxPool[fxCursor % fxPool.length]
+      fxCursor++
+      return r
+    }
+    return e
+  }
+
   function handleCellClick(row: number, col: number) {
     if (status.value === 'finished') return
 
@@ -208,7 +234,7 @@ export const useGameStore = defineStore('game', () => {
       wrongCell.value = { row, col }
       // 触感反馈
       tryVibrate(40)
-      if (settings.soundEnabled) playWrong()
+      if (settings.soundEnabled) playSound(settings.soundPack, 'wrong')
       if (wrongTimeout) clearTimeout(wrongTimeout)
       wrongTimeout = window.setTimeout(() => {
         wrongCell.value = null
@@ -217,7 +243,7 @@ export const useGameStore = defineStore('game', () => {
         // 严苛模式:点错立即结束
         stopTimer()
         tryVibrate([60, 40, 60])
-        if (settings.soundEnabled) playFail()
+        if (settings.soundEnabled) playSound(settings.soundPack, 'fail')
         return
       }
       return
@@ -226,15 +252,22 @@ export const useGameStore = defineStore('game', () => {
     // 正确
     cell.completed = true
     targetIndex.value++
-    if (settings.soundEnabled) playClick()
+    if (settings.soundEnabled) playSound(settings.soundPack, 'click')
     tryVibrate(10)
+
+    // 触发视觉特效(若启用)
+    const effect = pickEffect()
+    if (effect !== 'none') {
+      fxSeq++
+      lastFxCell.value = { row, col, effect, seq: fxSeq }
+    }
 
     // 第一次正确点击时启动计时
     if (status.value === 'ready') startTimer()
 
     if (targetIndex.value >= targetSequence.value.length) {
       stopTimer()
-      if (settings.soundEnabled) playSuccess()
+      if (settings.soundEnabled) playSound(settings.soundPack, 'success')
       tryVibrate([20, 30, 60])
     }
   }
@@ -249,38 +282,7 @@ export const useGameStore = defineStore('game', () => {
     return cell.value === target.value
   }
 
-  // ─── 反馈(轻量 Web Audio + 触感) ────────────────
-  let audioCtx: AudioContext | null = null
-  function getCtx(): AudioContext | null {
-    if (audioCtx) return audioCtx
-    try {
-      const Ctor = (window as any).AudioContext || (window as any).webkitAudioContext
-      if (!Ctor) return null
-      audioCtx = new Ctor()
-      return audioCtx
-    } catch { return null }
-  }
-  function beep(freq: number, duration: number, type: OscillatorType = 'sine', vol = 0.08) {
-    if (!settings.soundEnabled) return
-    const ctx = getCtx(); if (!ctx) return
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.type = type
-    osc.frequency.value = freq
-    gain.gain.value = vol
-    osc.connect(gain).connect(ctx.destination)
-    osc.start()
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration)
-    osc.stop(ctx.currentTime + duration)
-  }
-  function playClick()  { beep(660, 0.06, 'triangle', 0.06) }
-  function playWrong()  { beep(220, 0.18, 'sawtooth', 0.08) }
-  function playSuccess() {
-    beep(523, 0.1, 'triangle', 0.08)
-    setTimeout(() => beep(784, 0.16, 'triangle', 0.08), 110)
-  }
-  function playFail()   { beep(180, 0.4, 'sawtooth', 0.1) }
-
+  // ─── 触感反馈 ───────────────────────────────────────
   function tryVibrate(pattern: number | number[]) {
     if (!settings.hapticEnabled) return
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -292,9 +294,8 @@ export const useGameStore = defineStore('game', () => {
     // 状态
     gridSize, mode, status, grid, targetIndex, targetSequence, currentTarget,
     startedAt, pausedAt, pausedAccumMs, elapsedMs, finishedAt, durationMs,
-    mistakes, wrongCell,
+    mistakes, wrongCell, lastFxCell,
     // 方法
-    newGame, startGame, togglePause, handleCellClick, stopTimer,
-    beep
+    newGame, startGame, togglePause, handleCellClick, stopTimer
   }
 })
