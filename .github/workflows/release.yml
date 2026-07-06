@@ -258,7 +258,9 @@ jobs:
           echo === rustup show ===
           rustup show
           echo === running tauri build ===
-          call npm run tauri:build 2>&1
+          call npm run tauri:build > build-windows.log 2>&1
+          echo === build exit: %ERRORLEVEL% ===
+          type build-windows.log
           exit /b %ERRORLEVEL%
 
       - name: List bundle outputs
