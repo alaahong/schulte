@@ -10,9 +10,9 @@
 #
 # 关键点:
 #   - create-release 必须先于所有构建 job,确保 release 存在
-#   - softprops/action-gh-release@v2 在 release 已存在时只上传文件
-#   - 移动端 (Android/iOS) 必须先 `tauri mobile init` 再 build
-#   - 修复 tauri.conf.json 中 iOS 必须是 `iOS`(大写),Android 不能有 `targetSdkVersion`
+#   - 直接使用 gh release upload (而不是 softprops/action-gh-release) 显式报错
+#   - 每个上传步骤前有验证步骤,确保至少存在一个产物
+#   - iOS 用 `tauri ios build --no-bundle` (Tauri 2.x 推荐方式)
 #   - 启用 generate_release_notes 自动生成 changelog
 name: Release Build
 
@@ -82,6 +82,7 @@ jobs:
     outputs:
       release_id: ${{ steps.create.outputs.id }}
       release_url: ${{ steps.create.outputs.html_url }}
+      tag: ${{ github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -94,20 +95,21 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          echo "Creating draft release for tag: ${{ github.ref_name }}"
-          # 1. 确保 tag 存在(已由 push tags 触发,但再次确认)
-          if ! git rev-parse "${{ github.ref_name }}" >/dev/null 2>&1; then
-            echo "##[error]Tag ${{ github.ref_name }} not found"
+          TAG="${{ github.ref_name }}"
+          echo "Creating draft release for tag: ${TAG}"
+          # 1. 确保 tag 存在
+          if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "##[error]Tag ${TAG} not found"
             exit 1
           fi
           # 2. 删除可能已存在的旧 release(草稿),避免冲突
-          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
-            echo "Existing release for ${{ github.ref_name }} found, deleting it first"
-            gh release delete "${{ github.ref_name }}" --yes || true
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Existing release for ${TAG} found, deleting it first"
+            gh release delete "${TAG}" --yes || true
           fi
           # 3. 创建 draft release
-          CREATE_OUT=$(gh release create "${{ github.ref_name }}" \
-            --title "Schulte ${{ github.ref_name }}" \
+          CREATE_OUT=$(gh release create "${TAG}" \
+            --title "Schulte ${TAG}" \
             --draft \
             --generate-notes \
             --target "${{ github.sha }}" \
@@ -122,7 +124,7 @@ jobs:
           fi
           echo "Release URL: $RELEASE_URL"
           # 5. 重新获取 release id 用于 outputs
-          RELEASE_ID=$(gh release view "${{ github.ref_name }}" --json id --jq '.id')
+          RELEASE_ID=$(gh release view "${TAG}" --json id --jq '.id')
           echo "Release ID: $RELEASE_ID"
           {
             echo "id=$RELEASE_ID"
@@ -134,8 +136,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          # 简洁的 verify:只做只读 API 校验,失败仅警告不阻塞
-          # (create 步骤已做严格错误处理,这里只用于输出 Step Summary)
           echo "## Release created successfully ✅" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Tag:** \`${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
@@ -145,7 +145,6 @@ jobs:
           echo "All build jobs will now upload their artifacts to this release." >> "$GITHUB_STEP_SUMMARY"
 
           echo "--- Verifying release exists via API ---"
-          # 用单次 --jq 调用直接取 draft 字段,避免 tee+jq 流水线的 pipefail 问题
           DRAFT=$(gh release view "${TAG}" --jq '.draft // false' 2>/dev/null || echo "false")
           echo "Release draft status: ${DRAFT}"
           if [ "${DRAFT}" != "true" ]; then
@@ -223,12 +222,21 @@ jobs:
         env:
           CI: 'true'
 
-      - name: List bundle outputs
+      - name: Verify Linux artifacts exist
         if: always()
         run: |
           echo "--- bundle dir ---"
           find src-tauri/target/release/bundle -maxdepth 3 -type f 2>/dev/null | head -30
           echo "--- end ---"
+          # 必须有 .deb 和 .AppImage
+          DEB_COUNT=$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name "*.deb" 2>/dev/null | wc -l)
+          APPIMAGE_COUNT=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name "*.AppImage" 2>/dev/null | wc -l)
+          echo "deb count: ${DEB_COUNT}, appimage count: ${APPIMAGE_COUNT}"
+          if [ "${DEB_COUNT}" -eq 0 ] || [ "${APPIMAGE_COUNT}" -eq 0 ]; then
+            echo "##[error]Missing Linux artifacts: deb=${DEB_COUNT} appimage=${APPIMAGE_COUNT}"
+            exit 1
+          fi
+          echo "✅ Linux artifacts verified"
 
       - name: Upload logs (workflow)
         if: always()
@@ -240,13 +248,24 @@ jobs:
 
       - name: Upload to Release (Linux)
         if: github.ref_type == 'tag' && success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # 使用 gh release upload 直接上传,文件不存在时会显式失败
+          shopt -s nullglob
+          FILES=(
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
-          fail_on_unmatched_files: false
+          )
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "##[error]No Linux artifacts found to upload"
+            exit 1
+          fi
+          echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
+          printf '  - %s\n' "${FILES[@]}"
+          gh release upload "${TAG}" "${FILES[@]}" --clobber
 
       - name: Upload artifact (workflow)
         if: success()
@@ -378,7 +397,8 @@ jobs:
           rustup show
           echo === running tauri build (msi + nsis) ===
           call npx tauri build --bundles msi nsis > build-windows.log 2>&1
-          echo === build exit: %ERRORLEVEL% ===
+          set BUILD_EXIT=%ERRORLEVEL%
+          echo === build exit: %BUILD_EXIT% ===
           type build-windows.log
           echo === bundle dir listing ===
           if exist src-tauri\target\release\bundle (
@@ -386,22 +406,34 @@ jobs:
           ) else (
             echo NO BUNDLE DIR FOUND
           )
-          exit /b %ERRORLEVEL%
+          echo === exe in target/release ===
+          if exist src-tauri\target\release\*.exe (
+            dir /b src-tauri\target\release\*.exe
+          ) else (
+            echo NO EXE FOUND IN target/release
+          )
+          exit /b %BUILD_EXIT%
 
-      - name: List bundle outputs
+      - name: Verify Windows artifacts exist
         if: always()
         shell: pwsh
         run: |
-          Write-Host "--- bundle dir ---"
-          if (Test-Path src-tauri/target/release/bundle) {
-            Get-ChildItem src-tauri/target/release/bundle -Recurse -File | Select-Object -First 30 | ForEach-Object { $_.FullName }
-          } else {
-            Write-Host "Bundle directory does not exist"
+          $msiDir = "src-tauri/target/release/bundle/msi"
+          $nsisDir = "src-tauri/target/release/bundle/nsis"
+          $msiCount = 0
+          $nsisCount = 0
+          if (Test-Path $msiDir) {
+            $msiCount = (Get-ChildItem $msiDir -Filter "*.msi" -ErrorAction SilentlyContinue | Measure-Object).Count
           }
-          Write-Host "--- target/release dir ---"
-          if (Test-Path src-tauri/target/release) {
-            Get-ChildItem src-tauri/target/release -Filter "*.exe" | ForEach-Object { $_.FullName }
+          if (Test-Path $nsisDir) {
+            $nsisCount = (Get-ChildItem $nsisDir -Filter "*.exe" -ErrorAction SilentlyContinue | Measure-Object).Count
           }
+          Write-Host "msi count: $msiCount, nsis count: $nsisCount"
+          if ($msiCount -eq 0 -and $nsisCount -eq 0) {
+            Write-Host "##[error]No Windows installer artifacts found (need at least one of msi/nsis)"
+            exit 1
+          }
+          Write-Host "✅ Windows artifacts verified (msi=$msiCount nsis=$nsisCount)"
 
       - name: Upload logs (workflow)
         if: always()
@@ -413,13 +445,24 @@ jobs:
 
       - name: Upload to Release (Windows)
         if: github.ref_type == 'tag' && success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # 使用 gh release upload 直接上传,文件不存在时会显式失败
+          shopt -s nullglob
+          FILES=(
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
-          fail_on_unmatched_files: false
+          )
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "##[error]No Windows artifacts found to upload"
+            exit 1
+          fi
+          echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
+          printf '  - %s\n' "${FILES[@]}"
+          gh release upload "${TAG}" "${FILES[@]}" --clobber
 
       - name: Upload artifact (workflow)
         if: success()
@@ -482,11 +525,17 @@ jobs:
         env:
           CI: 'true'
 
-      - name: List bundle outputs
+      - name: Verify macOS arm64 artifacts exist
         if: always()
         run: |
           find src-tauri/target/aarch64-apple-darwin/release/bundle -maxdepth 3 -type f 2>/dev/null | head -30
-          echo "--- end ---"
+          DMG_COUNT=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name "*.dmg" 2>/dev/null | wc -l)
+          echo "dmg count: ${DMG_COUNT}"
+          if [ "${DMG_COUNT}" -eq 0 ]; then
+            echo "##[error]No macOS arm64 .dmg artifacts found"
+            exit 1
+          fi
+          echo "✅ macOS arm64 artifacts verified"
 
       - name: Upload logs (workflow)
         if: always()
@@ -498,13 +547,23 @@ jobs:
 
       - name: Upload to Release (macOS arm64)
         if: github.ref_type == 'tag' && success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          FILES=(
             src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
             src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
-          fail_on_unmatched_files: false
+          )
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "##[error]No macOS arm64 artifacts found to upload"
+            exit 1
+          fi
+          echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
+          printf '  - %s\n' "${FILES[@]}"
+          gh release upload "${TAG}" "${FILES[@]}" --clobber
 
       - name: Upload artifact (workflow)
         if: success()
@@ -567,11 +626,17 @@ jobs:
         env:
           CI: 'true'
 
-      - name: List bundle outputs
+      - name: Verify macOS x64 artifacts exist
         if: always()
         run: |
           find src-tauri/target/x86_64-apple-darwin/release/bundle -maxdepth 3 -type f 2>/dev/null | head -30
-          echo "--- end ---"
+          DMG_COUNT=$(find src-tauri/target/x86_64-apple-darwin/release/bundle/dmg -maxdepth 1 -name "*.dmg" 2>/dev/null | wc -l)
+          echo "dmg count: ${DMG_COUNT}"
+          if [ "${DMG_COUNT}" -eq 0 ]; then
+            echo "##[error]No macOS x64 .dmg artifacts found"
+            exit 1
+          fi
+          echo "✅ macOS x64 artifacts verified"
 
       - name: Upload logs (workflow)
         if: always()
@@ -583,13 +648,23 @@ jobs:
 
       - name: Upload to Release (macOS x64)
         if: github.ref_type == 'tag' && success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          FILES=(
             src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
             src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
-          fail_on_unmatched_files: false
+          )
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "##[error]No macOS x64 artifacts found to upload"
+            exit 1
+          fi
+          echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
+          printf '  - %s\n' "${FILES[@]}"
+          gh release upload "${TAG}" "${FILES[@]}" --clobber
 
       - name: Upload artifact (workflow)
         if: success()
@@ -675,7 +750,7 @@ jobs:
           set -o pipefail
           npx tauri android build --apk 2>&1 | tee build-android.log
 
-      - name: List APK outputs
+      - name: Verify Android artifacts exist
         if: always()
         run: |
           echo "--- find APK ---"
@@ -683,6 +758,13 @@ jobs:
           echo "--- find AAB ---"
           find src-tauri/gen/android -name "*.aab" 2>/dev/null | head -20
           echo "--- end ---"
+          APK_COUNT=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" 2>/dev/null | wc -l)
+          echo "apk count: ${APK_COUNT}"
+          if [ "${APK_COUNT}" -eq 0 ]; then
+            echo "##[error]No Android APK artifacts found"
+            exit 1
+          fi
+          echo "✅ Android artifacts verified"
 
       - name: Upload logs (workflow)
         if: always()
@@ -694,13 +776,23 @@ jobs:
 
       - name: Upload to Release (Android)
         if: github.ref_type == 'tag' && success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          FILES=(
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
             src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
-          fail_on_unmatched_files: false
+          )
+          if [ ${#FILES[@]} -eq 0 ]; then
+            echo "##[error]No Android artifacts found to upload"
+            exit 1
+          fi
+          echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
+          printf '  - %s\n' "${FILES[@]}"
+          gh release upload "${TAG}" "${FILES[@]}" --clobber
 
       - name: Upload artifact (workflow)
         if: success()
@@ -770,15 +862,34 @@ jobs:
           CI: 'true'
         run: |
           set -o pipefail
-          # --bundles app: 只生成 .app,不生成需要签名的 .ipa
-          npx tauri build --bundles app --target aarch64-apple-ios 2>&1 | tee build-ios.log
+          # Tauri 2.x: 使用 tauri ios build 生成未签名的 .app
+          # --no-bundle 跳过 .ipa 打包(ipa 需要签名)
+          npx tauri ios build --no-bundle --target aarch64-apple-ios 2>&1 | tee build-ios.log
+          set +e
+          echo "=== build exit: $? ==="
+          set -e
+          echo "=== find .app (recursive) ==="
+          find src-tauri/target src-tauri/gen -name "*.app" 2>/dev/null
+          echo "=== end ==="
 
-      - name: List .app outputs
+      - name: Verify iOS .app exists
         if: always()
         run: |
-          echo "--- find .app ---"
-          find src-tauri/target -name "*.app" 2>/dev/null | head -10
+          echo "--- find .app (no maxdepth) ---"
+          find src-tauri/target -name "*.app" 2>/dev/null
+          echo "--- also check gen/ ---"
+          find src-tauri/gen -name "*.app" 2>/dev/null | head -10
+          echo "--- list build-* dir ---"
+          ls -la src-tauri/target/aarch64-apple-ios/release/ 2>/dev/null | head -20
           echo "--- end ---"
+          # 收集所有 .app 路径
+          APP_PATHS=$(find src-tauri/target src-tauri/gen -name "*.app" 2>/dev/null | head -5)
+          if [ -z "${APP_PATHS}" ]; then
+            echo "##[error]No iOS .app artifact found"
+            exit 1
+          fi
+          echo "✅ iOS .app found:"
+          echo "${APP_PATHS}"
 
       - name: Upload logs (workflow)
         if: always()
@@ -788,22 +899,40 @@ jobs:
           path: build-ios.log
           if-no-files-found: ignore
 
-      - name: Upload to Release (iOS)
+      - name: Zip and upload to Release (iOS)
         if: github.ref_type == 'tag' && success()
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: |
-            src-tauri/target/**/*.app
-          fail_on_unmatched_files: false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # 找到 .app 目录并打包成 zip(因为 gh release upload 不支持目录)
+          shopt -s nullglob
+          APP_DIRS=( $(find src-tauri/target src-tauri/gen -name "*.app" -type d 2>/dev/null | head -5) )
+          if [ ${#APP_DIRS[@]} -eq 0 ]; then
+            echo "##[error]No iOS .app directory found to zip"
+            exit 1
+          fi
+          echo "Found ${#APP_DIRS[@]} .app dir(s):"
+          printf '  - %s\n' "${APP_DIRS[@]}"
+
+          cd "$(dirname "${APP_DIRS[0]}")"
+          APP_BASENAME=$(basename "${APP_DIRS[0]}")
+          ZIP_NAME="${APP_BASENAME}.zip"
+          echo "Creating zip: ${ZIP_NAME}"
+          # ditto 在 macOS 上保留资源分支 (preserve attributes)
+          ditto -c -k --sequesterRsrc --keepParent "${APP_BASENAME}" "${ZIP_NAME}"
+          ls -la "${ZIP_NAME}"
+          cd - >/dev/null
+          echo "Uploading ${ZIP_NAME} to release ${TAG}"
+          gh release upload "${TAG}" "${ZIP_NAME}" --clobber
 
       - name: Upload artifact (workflow)
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: schulte-ios
-          path: |
-            src-tauri/target/**/*.app
+          name: schulte-ios-zip
+          path: "*.app.zip"
           if-no-files-found: ignore
 
   # ============================================================
@@ -816,20 +945,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Build status summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
         run: |
-          echo "## Release Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Job | Result |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Linux       | ${{ needs.linux.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Windows     | ${{ needs.windows.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| macOS arm64 | ${{ needs.macos-arm64.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| macOS x64   | ${{ needs.macos-x64.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Android     | ${{ needs.android.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| iOS         | ${{ needs.ios.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            echo "Release: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "_Release is created as draft. After all builds succeed, publish from the Releases page._" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Release Build Summary"
+            echo ""
+            echo "| Job | Result |"
+            echo "|-----|--------|"
+            echo "| Linux       | ${{ needs.linux.result }} |"
+            echo "| Windows     | ${{ needs.windows.result }} |"
+            echo "| macOS arm64 | ${{ needs.macos-arm64.result }} |"
+            echo "| macOS x64   | ${{ needs.macos-x64.result }} |"
+            echo "| Android     | ${{ needs.android.result }} |"
+            echo "| iOS         | ${{ needs.ios.result }} |"
+            echo ""
+            echo "Release: https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+            echo ""
+            echo "### Assets in release"
+            if [ "${{ github.ref_type }}" = "tag" ]; then
+              gh release view "${TAG}" --json assets --jq '.assets[] | "- \(.name) (\(.size) bytes)"' 2>/dev/null || echo "_(could not fetch asset list)_"
+            fi
+            echo ""
+            echo "_Release is created as draft. After all builds succeed, publish from the Releases page._"
+          } >> "$GITHUB_STEP_SUMMARY"
