@@ -245,16 +245,9 @@ jobs:
           MSVC_VCVARS: ${{ steps.msvc.outputs.msvc_vcvars }}
           CI: 'true'
         run: |
-          Write-Host "=== DEBUG: vcvars path: $env:MSVC_VCVARS ==="
-          Write-Host "=== DEBUG: rustup show ==="
-          rustup show
-          Write-Host "=== DEBUG: rustc target ==="
-          rustc --print target-list | Select-String "windows" | Select-Object -First 10
-          Write-Host "=== DEBUG: which link.exe (before vcvars) ==="
-          where.exe link.exe 2>&1 | Select-Object -First 3
-          Write-Host "=== Sourcing vcvars and building ==="
-          # Wrap entire build inside a single cmd.exe so vcvars env propagates to tauri/cargo
-          cmd.exe /c "`"$env:MSVC_VCVARS`" >nul & set LINK=& set CL=& npm run tauri:build 2>&1" | Tee-Object -FilePath build-windows.log
+          Write-Host "=== vcvars: $env:MSVC_VCVARS ==="
+          # Run the .bat build script which sources vcvars, sets MSVC toolchain, then runs tauri build
+          cmd.exe /c "scripts\build-windows.bat 2>&1" | Tee-Object -FilePath build-windows.log
           exit $LASTEXITCODE
 
       - name: List bundle outputs
