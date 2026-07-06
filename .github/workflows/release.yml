@@ -179,7 +179,8 @@ jobs:
           "msvc_vcvars=$vcvars" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "MSVC_VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           # Also load env vars into the current process so Verify Tauri CLI can confirm them
-          cmd.exe /c "`"$vcvars`" >nul && set" | ForEach-Object {
+          # Use `&` (unconditional) so a non-zero vcvars exit doesn't skip `set`
+          cmd.exe /c "`"$vcvars`" >nul & set" | ForEach-Object {
             if ($_ -match '^([^=]+)=(.*)$') {
               [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
             }
@@ -244,9 +245,16 @@ jobs:
           MSVC_VCVARS: ${{ steps.msvc.outputs.msvc_vcvars }}
           CI: 'true'
         run: |
-          Write-Host "--- vcvars: $env:MSVC_VCVARS ---"
+          Write-Host "=== DEBUG: vcvars path: $env:MSVC_VCVARS ==="
+          Write-Host "=== DEBUG: rustup show ==="
+          rustup show
+          Write-Host "=== DEBUG: rustc target ==="
+          rustc --print target-list | Select-String "windows" | Select-Object -First 10
+          Write-Host "=== DEBUG: which link.exe (before vcvars) ==="
+          where.exe link.exe 2>&1 | Select-Object -First 3
+          Write-Host "=== Sourcing vcvars and building ==="
           # Wrap entire build inside a single cmd.exe so vcvars env propagates to tauri/cargo
-          cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && npm run tauri:build 2>&1" | Tee-Object -FilePath build-windows.log
+          cmd.exe /c "`"$env:MSVC_VCVARS`" >nul & set LINK=& set CL=& npm run tauri:build 2>&1" | Tee-Object -FilePath build-windows.log
           exit $LASTEXITCODE
 
       - name: List bundle outputs
