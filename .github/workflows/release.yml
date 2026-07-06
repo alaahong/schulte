@@ -175,7 +175,8 @@ jobs:
             $vcvars = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
           }
           Write-Host "vcvars: $vcvars"
-          # Save vcvars path to GITHUB_ENV so later steps can source it
+          # Save vcvars path to step output AND env so later steps can source it
+          "msvc_vcvars=$vcvars" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "MSVC_VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           # Also load env vars into the current process so Verify Tauri CLI can confirm them
           cmd.exe /c "`"$vcvars`" >nul && set" | ForEach-Object {
@@ -218,19 +219,20 @@ jobs:
       - name: Verify Tauri CLI
         shell: pwsh
         env:
-          MSVC_VCVARS: ${{ steps.msvc.outputs.MSVC_VCVARS }}
+          MSVC_VCVARS: ${{ steps.msvc.outputs.msvc_vcvars }}
         run: |
+          Write-Host "--- vcvars: $env:MSVC_VCVARS ---"
           node --version
           npx tauri --version
           rustup show
           rustc --version
-          # Source vcvars then verify
-          cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && where.exe link.exe && where.exe cl.exe"
+          # Source vcvars then verify (don't fail on missing tool)
+          cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && (where.exe link.exe & where.exe cl.exe)"
 
       - name: Generate Tauri icons
         shell: pwsh
         env:
-          MSVC_VCVARS: ${{ steps.msvc.outputs.MSVC_VCVARS }}
+          MSVC_VCVARS: ${{ steps.msvc.outputs.msvc_vcvars }}
         run: |
           # Source vcvars then run npm script
           cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && npm run icons:tauri"
@@ -239,7 +241,7 @@ jobs:
       - name: Build Tauri (Windows)
         shell: pwsh
         env:
-          MSVC_VCVARS: ${{ steps.msvc.outputs.MSVC_VCVARS }}
+          MSVC_VCVARS: ${{ steps.msvc.outputs.msvc_vcvars }}
           CI: 'true'
         run: |
           Write-Host "--- vcvars: $env:MSVC_VCVARS ---"
