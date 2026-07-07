@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "舒尔特方格",
+  "productName": "SchulteGrid",
   "version": "0.1.0",
   "identifier": "com.schulte.app",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "舒尔特方格 · 注意力训练",
+        "title": "Schulte Grid · Attention Training",
         "width": 900,
         "height": 700,
         "minWidth": 360,
@@ -38,8 +38,8 @@
       "icons/icon.ico"
     ],
     "category": "Education",
-    "shortDescription": "舒尔特方格注意力训练",
-    "longDescription": "跨平台舒尔特方格注意力训练应用,支持桌面、Web、移动端。",
+    "shortDescription": "Schulte Grid attention training",
+    "longDescription": "Cross-platform Schulte Grid attention training app for desktop, web and mobile.",
     "publisher": "Schulte App",
     "copyright": "© 2026",
     "iOS": {

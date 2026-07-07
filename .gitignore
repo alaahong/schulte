@@ -12,8 +12,10 @@ dist-ssr/
 
 # Tauri
 src-tauri/target/
-src-tauri/Cargo.lock
 src-tauri/gen/
+
+# 注意: src-tauri/Cargo.lock 故意 commit(app 项目,Cargo.lock 是构建可重现性的保证,
+# 也是 GitHub Actions 缓存 key 的依据 — 见 .github/workflows/release.yml)
 
 # PWA
 dev-dist/

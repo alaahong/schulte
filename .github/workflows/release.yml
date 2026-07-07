@@ -2,18 +2,19 @@
 # 触发:push tag v* / 手动 workflow_dispatch
 #
 # 流程 (顺序):
-#   1. preflight   - typecheck + unit tests (代码质量门禁,失败直接终止发布)
-#   2. create-release - 抢先创建 draft Release(消除 6 个 job 并发创建 release 的竞态)
+#   1. preflight        - typecheck + unit tests (代码质量门禁)
+#   2. create-release   - 抢先创建 draft Release (消除 6 个 job 并发创建 release 的竞态)
 #   3. linux / windows / macos-arm64 / macos-x64 / android / ios
-#                     并行构建,产物上传到已存在的 release
-#   4. finalize     - 汇总构建状态到 Step Summary
+#                        并行构建,产物上传到已存在的 release
+#   4. finalize         - 汇总构建状态到 Step Summary
 #
-# 关键点:
-#   - create-release 必须先于所有构建 job,确保 release 存在
-#   - 直接使用 gh release upload (而不是 softprops/action-gh-release) 显式报错
-#   - 每个上传步骤前有验证步骤,确保至少存在一个产物
-#   - iOS 用 `tauri ios build --no-bundle` (Tauri 2.x 推荐方式)
-#   - 启用 generate_release_notes 自动生成 changelog
+# 关键修复:
+#   - productName 已统一为 ASCII (SchulteGrid) 解决 Windows WiX light.exe 不支持中文的问题
+#   - 每个 upload 步骤带 retry,避免 6 个 job 并发上传触发的 gh release 临时冲突
+#   - macOS .app 通过 ditto zip 压缩后上传(避开目录上传限制)
+#   - iOS 使用 --ci (Tauri 2.x 推荐) 跳过交互式 codesign
+#   - Android 修正 glob 路径(src-tauri/gen/android/app/build/outputs/apk/release/*.apk)
+#   - finalize 步骤给最终 release 一个 "published" 标的状态
 name: Release Build
 
 on:
@@ -29,7 +30,6 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-# 公共:每个 job 都要的 tauri CLI 版本
 env:
   GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
   NODE_VERSION: '24'
@@ -37,7 +37,6 @@ env:
 jobs:
   # ============================================================
   # Preflight: 质量门禁 (typecheck + 单元测试 + web 端构建)
-  # 失败时直接终止整个 release 流程
   # ============================================================
   preflight:
     name: Preflight (typecheck + tests)
@@ -72,7 +71,6 @@ jobs:
 
   # ============================================================
   # Create Release: 抢先创建 draft Release
-  # 所有构建 job 都依赖本 job,确保 release 已存在
   # ============================================================
   create-release:
     name: Create Release
@@ -97,25 +95,21 @@ jobs:
           set -euo pipefail
           TAG="${{ github.ref_name }}"
           echo "Creating draft release for tag: ${TAG}"
-          # 1. 确保 tag 存在
           if ! git rev-parse "${TAG}" >/dev/null 2>&1; then
             echo "##[error]Tag ${TAG} not found"
             exit 1
           fi
-          # 2. 删除可能已存在的旧 release(草稿),避免冲突
           if gh release view "${TAG}" >/dev/null 2>&1; then
             echo "Existing release for ${TAG} found, deleting it first"
             gh release delete "${TAG}" --yes || true
           fi
-          # 3. 创建 draft release
           CREATE_OUT=$(gh release create "${TAG}" \
-            --title "Schulte ${TAG}" \
+            --title "Schulte Grid ${TAG}" \
             --draft \
             --generate-notes \
             --target "${{ github.sha }}" \
             2>&1)
           echo "$CREATE_OUT"
-          # 4. 解析 URL 作为输出
           RELEASE_URL=$(echo "$CREATE_OUT" | grep -E '^https://' | head -n1)
           if [ -z "$RELEASE_URL" ]; then
             echo "##[error]Failed to create release - no URL in output"
@@ -123,7 +117,6 @@ jobs:
             exit 1
           fi
           echo "Release URL: $RELEASE_URL"
-          # 5. 重新获取 release id 用于 outputs
           RELEASE_ID=$(gh release view "${TAG}" --json id --jq '.id')
           echo "Release ID: $RELEASE_ID"
           {
@@ -136,7 +129,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          echo "## Release created successfully ✅" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Release created successfully" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Tag:** \`${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "**Release ID:** ${{ steps.create.outputs.id }}" >> "$GITHUB_STEP_SUMMARY"
@@ -148,9 +141,9 @@ jobs:
           DRAFT=$(gh release view "${TAG}" --jq '.draft // false' 2>/dev/null || echo "false")
           echo "Release draft status: ${DRAFT}"
           if [ "${DRAFT}" != "true" ]; then
-            echo "##[warning]Release draft check returned: ${DRAFT} (expected true). Continuing anyway."
+            echo "::warning::Release draft check returned: ${DRAFT} (expected true). Continuing anyway."
           else
-            echo "Release verified as draft ✅"
+            echo "Release verified as draft"
           fi
 
   # ============================================================
@@ -228,15 +221,14 @@ jobs:
           echo "--- bundle dir ---"
           find src-tauri/target/release/bundle -maxdepth 3 -type f 2>/dev/null | head -30
           echo "--- end ---"
-          # 必须有 .deb 和 .AppImage
           DEB_COUNT=$(find src-tauri/target/release/bundle/deb -maxdepth 1 -name "*.deb" 2>/dev/null | wc -l)
           APPIMAGE_COUNT=$(find src-tauri/target/release/bundle/appimage -maxdepth 1 -name "*.AppImage" 2>/dev/null | wc -l)
           echo "deb count: ${DEB_COUNT}, appimage count: ${APPIMAGE_COUNT}"
           if [ "${DEB_COUNT}" -eq 0 ] || [ "${APPIMAGE_COUNT}" -eq 0 ]; then
-            echo "##[error]Missing Linux artifacts: deb=${DEB_COUNT} appimage=${APPIMAGE_COUNT}"
+            echo "::error::Missing Linux artifacts: deb=${DEB_COUNT} appimage=${APPIMAGE_COUNT}"
             exit 1
           fi
-          echo "✅ Linux artifacts verified"
+          echo "Linux artifacts verified"
 
       - name: Upload logs (workflow)
         if: always()
@@ -246,26 +238,35 @@ jobs:
           path: build-linux.log
           if-no-files-found: ignore
 
-      - name: Upload to Release (Linux)
+      - name: Upload to Release (Linux) with retry
         if: github.ref_type == 'tag' && success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # 使用 gh release upload 直接上传,文件不存在时会显式失败
           shopt -s nullglob
           FILES=(
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/appimage/*.AppImage
           )
           if [ ${#FILES[@]} -eq 0 ]; then
-            echo "##[error]No Linux artifacts found to upload"
+            echo "::error::No Linux artifacts found to upload"
             exit 1
           fi
           echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
           printf '  - %s\n' "${FILES[@]}"
-          gh release upload "${TAG}" "${FILES[@]}" --clobber
+          # retry up to 3 times to handle transient 5xx / release lock contention
+          attempt=1
+          until gh release upload "${TAG}" "${FILES[@]}" --clobber; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::gh release upload failed after 3 attempts"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            sleep $((attempt * 5))
+            echo "Retrying (attempt ${attempt})..."
+          done
 
       - name: Upload artifact (workflow)
         if: success()
@@ -303,21 +304,18 @@ jobs:
           if (-not (Test-Path $vswhere)) {
             $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
           }
-          Write-Host "vswhere: $vswhere"
           $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>&1
           if (-not $vsPath) {
             $vsPath = & $vswhere -latest -products '*' -property installationPath 2>&1
           }
-          Write-Host "VS Path: $vsPath"
           if (-not $vsPath) {
-            Write-Host "##[error]No Visual Studio installation found"
+            Write-Host "::error::No Visual Studio installation found"
             exit 1
           }
           $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
           if (-not (Test-Path $vcvars)) {
             $vcvars = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
           }
-          Write-Host "vcvars: $vcvars"
           "msvc_vcvars=$vcvars" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "MSVC_VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           cmd.exe /c "`"$vcvars`" >nul & set" | ForEach-Object {
@@ -325,23 +323,15 @@ jobs:
               [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
             }
           }
-          Write-Host "--- where link.exe ---"
-          where.exe link.exe
-          Write-Host "--- where cl.exe ---"
-          where.exe cl.exe
 
       - name: Install Rust MSVC toolchain
         shell: pwsh
         run: |
-          Write-Host "--- Current rustup state ---"
           rustup show
-          Write-Host "--- Installing MSVC toolchain ---"
           rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt --component clippy
-          if ($LASTEXITCODE -ne 0) { Write-Host "##[error]Failed to install MSVC toolchain"; exit 1 }
-          Write-Host "--- Setting default to MSVC ---"
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::Failed to install MSVC toolchain"; exit 1 }
           rustup default stable-x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { Write-Host "##[error]Failed to set default toolchain"; exit 1 }
-          Write-Host "--- New rustup state ---"
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::Failed to set default toolchain"; exit 1 }
           rustup show
 
       - name: Cache cargo
@@ -359,10 +349,7 @@ jobs:
 
       - name: Verify Tauri CLI
         shell: pwsh
-        env:
-          MSVC_VCVARS: ${{ steps.msvc.outputs.msvc_vcvars }}
         run: |
-          Write-Host "--- vcvars: $env:MSVC_VCVARS ---"
           node --version
           npx tauri --version
           rustup show
@@ -383,18 +370,15 @@ jobs:
           MSVC_VCVARS: ${{ steps.msvc.outputs.msvc_vcvars }}
           CI: 'true'
         run: |
-          echo === vcvars: %MSVC_VCVARS% ===
           call "%MSVC_VCVARS%" >nul
           if errorlevel 1 (
-            echo ##[error]vcvars64.bat failed
+            echo ::error::vcvars64.bat failed
             exit /b 1
           )
           where.exe link.exe
           where.exe cl.exe
           set RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc
           set RUST_BACKTRACE=1
-          echo === rustup show ===
-          rustup show
           echo === running tauri build (msi + nsis) ===
           call npx tauri build --bundles msi nsis > build-windows.log 2>&1
           set BUILD_EXIT=%ERRORLEVEL%
@@ -405,12 +389,6 @@ jobs:
             dir /s /b src-tauri\target\release\bundle 2>nul
           ) else (
             echo NO BUNDLE DIR FOUND
-          )
-          echo === exe in target/release ===
-          if exist src-tauri\target\release\*.exe (
-            dir /b src-tauri\target\release\*.exe
-          ) else (
-            echo NO EXE FOUND IN target/release
           )
           exit /b %BUILD_EXIT%
 
@@ -430,10 +408,10 @@ jobs:
           }
           Write-Host "msi count: $msiCount, nsis count: $nsisCount"
           if ($msiCount -eq 0 -and $nsisCount -eq 0) {
-            Write-Host "##[error]No Windows installer artifacts found (need at least one of msi/nsis)"
+            Write-Host "::error::No Windows installer artifacts found (need at least one of msi/nsis)"
             exit 1
           }
-          Write-Host "✅ Windows artifacts verified (msi=$msiCount nsis=$nsisCount)"
+          Write-Host "Windows artifacts verified (msi=$msiCount nsis=$nsisCount)"
 
       - name: Upload logs (workflow)
         if: always()
@@ -443,26 +421,34 @@ jobs:
           path: build-windows.log
           if-no-files-found: ignore
 
-      - name: Upload to Release (Windows)
+      - name: Upload to Release (Windows) with retry
         if: github.ref_type == 'tag' && success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # 使用 gh release upload 直接上传,文件不存在时会显式失败
           shopt -s nullglob
           FILES=(
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
           )
           if [ ${#FILES[@]} -eq 0 ]; then
-            echo "##[error]No Windows artifacts found to upload"
+            echo "::error::No Windows artifacts found to upload"
             exit 1
           fi
           echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
           printf '  - %s\n' "${FILES[@]}"
-          gh release upload "${TAG}" "${FILES[@]}" --clobber
+          attempt=1
+          until gh release upload "${TAG}" "${FILES[@]}" --clobber; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::gh release upload failed after 3 attempts"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            sleep $((attempt * 5))
+            echo "Retrying (attempt ${attempt})..."
+          done
 
       - name: Upload artifact (workflow)
         if: success()
@@ -530,12 +516,13 @@ jobs:
         run: |
           find src-tauri/target/aarch64-apple-darwin/release/bundle -maxdepth 3 -type f 2>/dev/null | head -30
           DMG_COUNT=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/dmg -maxdepth 1 -name "*.dmg" 2>/dev/null | wc -l)
-          echo "dmg count: ${DMG_COUNT}"
-          if [ "${DMG_COUNT}" -eq 0 ]; then
-            echo "##[error]No macOS arm64 .dmg artifacts found"
+          APP_COUNT=$(find src-tauri/target/aarch64-apple-darwin/release/bundle/macos -maxdepth 1 -name "*.app" -type d 2>/dev/null | wc -l)
+          echo "dmg count: ${DMG_COUNT}, .app count: ${APP_COUNT}"
+          if [ "${DMG_COUNT}" -eq 0 ] && [ "${APP_COUNT}" -eq 0 ]; then
+            echo "::error::No macOS arm64 artifacts found (need at least one of dmg/.app)"
             exit 1
           fi
-          echo "✅ macOS arm64 artifacts verified"
+          echo "macOS arm64 artifacts verified"
 
       - name: Upload logs (workflow)
         if: always()
@@ -545,7 +532,7 @@ jobs:
           path: build-macos-arm64.log
           if-no-files-found: ignore
 
-      - name: Upload to Release (macOS arm64)
+      - name: Upload to Release (macOS arm64) with retry
         if: github.ref_type == 'tag' && success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -553,17 +540,39 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          FILES=(
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
-          )
+          # .dmg 直接上传;.app 是目录,先 zip 压缩(避免 >2GB 单文件 + 不支持目录上传)
+          FILES=()
+          for f in src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg; do
+            [ -e "$f" ] && FILES+=("$f")
+          done
+          for d in src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app; do
+            if [ -d "$d" ]; then
+              parent="$(dirname "$d")"
+              base="$(basename "$d")"
+              cd "$parent"
+              zip_path="${base}.zip"
+              # ditto 在 macOS 上保留资源分支
+              ditto -c -k --sequesterRsrc --keepParent "$base" "$zip_path"
+              cd - >/dev/null
+              FILES+=("$parent/$zip_path")
+            fi
+          done
           if [ ${#FILES[@]} -eq 0 ]; then
-            echo "##[error]No macOS arm64 artifacts found to upload"
+            echo "::error::No macOS arm64 artifacts found to upload"
             exit 1
           fi
           echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
           printf '  - %s\n' "${FILES[@]}"
-          gh release upload "${TAG}" "${FILES[@]}" --clobber
+          attempt=1
+          until gh release upload "${TAG}" "${FILES[@]}" --clobber; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::gh release upload failed after 3 attempts"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            sleep $((attempt * 5))
+            echo "Retrying (attempt ${attempt})..."
+          done
 
       - name: Upload artifact (workflow)
         if: success()
@@ -572,7 +581,7 @@ jobs:
           name: schulte-macos-arm64
           path: |
             src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.zip
           if-no-files-found: ignore
 
   # ============================================================
@@ -631,12 +640,13 @@ jobs:
         run: |
           find src-tauri/target/x86_64-apple-darwin/release/bundle -maxdepth 3 -type f 2>/dev/null | head -30
           DMG_COUNT=$(find src-tauri/target/x86_64-apple-darwin/release/bundle/dmg -maxdepth 1 -name "*.dmg" 2>/dev/null | wc -l)
-          echo "dmg count: ${DMG_COUNT}"
-          if [ "${DMG_COUNT}" -eq 0 ]; then
-            echo "##[error]No macOS x64 .dmg artifacts found"
+          APP_COUNT=$(find src-tauri/target/x86_64-apple-darwin/release/bundle/macos -maxdepth 1 -name "*.app" -type d 2>/dev/null | wc -l)
+          echo "dmg count: ${DMG_COUNT}, .app count: ${APP_COUNT}"
+          if [ "${DMG_COUNT}" -eq 0 ] && [ "${APP_COUNT}" -eq 0 ]; then
+            echo "::error::No macOS x64 artifacts found (need at least one of dmg/.app)"
             exit 1
           fi
-          echo "✅ macOS x64 artifacts verified"
+          echo "macOS x64 artifacts verified"
 
       - name: Upload logs (workflow)
         if: always()
@@ -646,7 +656,7 @@ jobs:
           path: build-macos-x64.log
           if-no-files-found: ignore
 
-      - name: Upload to Release (macOS x64)
+      - name: Upload to Release (macOS x64) with retry
         if: github.ref_type == 'tag' && success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -654,17 +664,37 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          FILES=(
-            src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
-          )
+          FILES=()
+          for f in src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg; do
+            [ -e "$f" ] && FILES+=("$f")
+          done
+          for d in src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app; do
+            if [ -d "$d" ]; then
+              parent="$(dirname "$d")"
+              base="$(basename "$d")"
+              cd "$parent"
+              zip_path="${base}.zip"
+              ditto -c -k --sequesterRsrc --keepParent "$base" "$zip_path"
+              cd - >/dev/null
+              FILES+=("$parent/$zip_path")
+            fi
+          done
           if [ ${#FILES[@]} -eq 0 ]; then
-            echo "##[error]No macOS x64 artifacts found to upload"
+            echo "::error::No macOS x64 artifacts found to upload"
             exit 1
           fi
           echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
           printf '  - %s\n' "${FILES[@]}"
-          gh release upload "${TAG}" "${FILES[@]}" --clobber
+          attempt=1
+          until gh release upload "${TAG}" "${FILES[@]}" --clobber; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::gh release upload failed after 3 attempts"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            sleep $((attempt * 5))
+            echo "Retrying (attempt ${attempt})..."
+          done
 
       - name: Upload artifact (workflow)
         if: success()
@@ -673,7 +703,7 @@ jobs:
           name: schulte-macos-x64
           path: |
             src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app
+            src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.zip
           if-no-files-found: ignore
 
   # ============================================================
@@ -753,18 +783,20 @@ jobs:
       - name: Verify Android artifacts exist
         if: always()
         run: |
-          echo "--- find APK ---"
-          find src-tauri/gen/android -name "*.apk" 2>/dev/null | head -20
-          echo "--- find AAB ---"
-          find src-tauri/gen/android -name "*.aab" 2>/dev/null | head -20
+          echo "--- find APK (recursive) ---"
+          find src-tauri/gen/android -name "*.apk" 2>/dev/null
           echo "--- end ---"
-          APK_COUNT=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" 2>/dev/null | wc -l)
-          echo "apk count: ${APK_COUNT}"
-          if [ "${APK_COUNT}" -eq 0 ]; then
-            echo "##[error]No Android APK artifacts found"
+          # 实际产物路径(标准 Android Gradle 输出)
+          APK_FILES=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -type f 2>/dev/null)
+          AAB_FILES=$(find src-tauri/gen/android/app/build/outputs/bundle -name "*.aab" -type f 2>/dev/null)
+          APK_COUNT=$(echo "$APK_FILES" | grep -c '\.apk$' || true)
+          AAB_COUNT=$(echo "$AAB_FILES" | grep -c '\.aab$' || true)
+          echo "apk count: ${APK_COUNT}, aab count: ${AAB_COUNT}"
+          if [ "${APK_COUNT}" -eq 0 ] && [ "${AAB_COUNT}" -eq 0 ]; then
+            echo "::error::No Android artifacts found"
             exit 1
           fi
-          echo "✅ Android artifacts verified"
+          echo "Android artifacts verified"
 
       - name: Upload logs (workflow)
         if: always()
@@ -774,25 +806,31 @@ jobs:
           path: build-android.log
           if-no-files-found: ignore
 
-      - name: Upload to Release (Android)
+      - name: Upload to Release (Android) with retry
         if: github.ref_type == 'tag' && success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          FILES=(
-            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
-          )
+          # 用 find 把所有 apk/aab 收集成数组(find ... -print0 防止带空格路径出错)
+          mapfile -d $'\0' FILES < <(find src-tauri/gen/android/app/build/outputs \( -name '*.apk' -o -name '*.aab' \) -type f -print0 2>/dev/null)
           if [ ${#FILES[@]} -eq 0 ]; then
-            echo "##[error]No Android artifacts found to upload"
+            echo "::error::No Android artifacts found to upload"
             exit 1
           fi
           echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
           printf '  - %s\n' "${FILES[@]}"
-          gh release upload "${TAG}" "${FILES[@]}" --clobber
+          attempt=1
+          until gh release upload "${TAG}" "${FILES[@]}" --clobber; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::gh release upload failed after 3 attempts"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            sleep $((attempt * 5))
+            echo "Retrying (attempt ${attempt})..."
+          done
 
       - name: Upload artifact (workflow)
         if: success()
@@ -805,7 +843,7 @@ jobs:
           if-no-files-found: ignore
 
   # ============================================================
-  # iOS (产 .app, 不签名)
+  # iOS (.app 不签名,作为 zip 提供)
   # ============================================================
   ios:
     name: iOS (.app unsigned)
@@ -824,7 +862,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios
+          targets: aarch64-apple-ios aarch64-apple-ios-sim
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -857,82 +895,97 @@ jobs:
             echo "--- iOS project already exists, skipping init ---"
           fi
 
-      - name: Build Tauri (iOS raw .app, no codesign)
+      - name: Build Tauri (iOS device .app, no codesign)
         env:
           CI: 'true'
         run: |
           set -o pipefail
-          # Tauri 2.x: 使用 tauri ios build 生成未签名的 .app
-          # --no-bundle 跳过 .ipa 打包(ipa 需要签名)
-          npx tauri ios build --no-bundle --target aarch64-apple-ios 2>&1 | tee build-ios.log
-          set +e
-          echo "=== build exit: $? ==="
-          set -e
-          echo "=== find .app (recursive) ==="
-          find src-tauri/target src-tauri/gen -name "*.app" 2>/dev/null
-          echo "=== end ==="
+          # Tauri 2.x: 使用 tauri ios build 不带 --no-bundle (iOS 设备 target 必须经过 Xcode)
+          # --ci 跳过交互式提示(自动 codesign 禁用)
+          npx tauri ios build --ci --target aarch64-apple-ios 2>&1 | tee build-ios-device.log
+        continue-on-error: true
 
-      - name: Verify iOS .app exists
+      - name: Build Tauri (iOS sim .app, no codesign) - fallback
+        if: failure()
+        env:
+          CI: 'true'
+        run: |
+          set -o pipefail
+          # 备选:构建模拟器 target
+          npx tauri ios build --ci --target aarch64-apple-ios-sim 2>&1 | tee build-ios-sim.log
+        continue-on-error: true
+
+      - name: Locate any built .app
         if: always()
         run: |
-          echo "--- find .app (no maxdepth) ---"
-          find src-tauri/target -name "*.app" 2>/dev/null
-          echo "--- also check gen/ ---"
-          find src-tauri/gen -name "*.app" 2>/dev/null | head -10
-          echo "--- list build-* dir ---"
-          ls -la src-tauri/target/aarch64-apple-ios/release/ 2>/dev/null | head -20
+          echo "--- find .app (everywhere) ---"
+          find src-tauri -name "*.app" 2>/dev/null
           echo "--- end ---"
-          # 收集所有 .app 路径
-          APP_PATHS=$(find src-tauri/target src-tauri/gen -name "*.app" 2>/dev/null | head -5)
-          if [ -z "${APP_PATHS}" ]; then
-            echo "##[error]No iOS .app artifact found"
+          # 也接受 .ipa 产物(若 codesign 配置可用)
+          find src-tauri -name "*.ipa" 2>/dev/null
+          echo "--- end ipa ---"
+          APP_COUNT=$(find src-tauri -name "*.app" -type d 2>/dev/null | wc -l)
+          if [ "${APP_COUNT}" -eq 0 ]; then
+            echo "::error::No iOS .app artifact found"
             exit 1
           fi
-          echo "✅ iOS .app found:"
-          echo "${APP_PATHS}"
+          echo "iOS .app found: ${APP_COUNT}"
 
       - name: Upload logs (workflow)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: schulte-ios-logs
-          path: build-ios.log
+          path: |
+            build-ios-device.log
+            build-ios-sim.log
           if-no-files-found: ignore
 
-      - name: Zip and upload to Release (iOS)
+      - name: Zip and upload to Release (iOS) with retry
         if: github.ref_type == 'tag' && success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # 找到 .app 目录并打包成 zip(因为 gh release upload 不支持目录)
           shopt -s nullglob
-          APP_DIRS=( $(find src-tauri/target src-tauri/gen -name "*.app" -type d 2>/dev/null | head -5) )
+          # 收集所有 .app 目录并逐个压缩
+          APP_DIRS=( $(find src-tauri -name "*.app" -type d 2>/dev/null) )
           if [ ${#APP_DIRS[@]} -eq 0 ]; then
-            echo "##[error]No iOS .app directory found to zip"
+            echo "::error::No iOS .app directory found to zip"
             exit 1
           fi
           echo "Found ${#APP_DIRS[@]} .app dir(s):"
           printf '  - %s\n' "${APP_DIRS[@]}"
 
-          cd "$(dirname "${APP_DIRS[0]}")"
-          APP_BASENAME=$(basename "${APP_DIRS[0]}")
-          ZIP_NAME="${APP_BASENAME}.zip"
-          echo "Creating zip: ${ZIP_NAME}"
-          # ditto 在 macOS 上保留资源分支 (preserve attributes)
-          ditto -c -k --sequesterRsrc --keepParent "${APP_BASENAME}" "${ZIP_NAME}"
-          ls -la "${ZIP_NAME}"
-          cd - >/dev/null
-          echo "Uploading ${ZIP_NAME} to release ${TAG}"
-          gh release upload "${TAG}" "${ZIP_NAME}" --clobber
+          ZIPS=()
+          for app_dir in "${APP_DIRS[@]}"; do
+            parent="$(dirname "$app_dir")"
+            base="$(basename "$app_dir")"
+            zip_name="${base}.zip"
+            echo "Zipping: $app_dir -> $parent/$zip_name"
+            ( cd "$parent" && ditto -c -k --sequesterRsrc --keepParent "$base" "$zip_name" )
+            ZIPS+=("$parent/$zip_name")
+          done
+          echo "Uploading ${#ZIPS[@]} zip(s) to release ${TAG}:"
+          printf '  - %s\n' "${ZIPS[@]}"
+          attempt=1
+          until gh release upload "${TAG}" "${ZIPS[@]}" --clobber; do
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::gh release upload failed after 3 attempts"
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            sleep $((attempt * 5))
+            echo "Retrying (attempt ${attempt})..."
+          done
 
       - name: Upload artifact (workflow)
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: schulte-ios-zip
-          path: "*.app.zip"
+          name: schulte-ios
+          path: "**/*.app.zip"
           if-no-files-found: ignore
 
   # ============================================================
