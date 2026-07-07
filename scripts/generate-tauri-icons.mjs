@@ -50,28 +50,80 @@ for (const [name, size] of Object.entries(sizes)) {
 }
 
 // Windows ICO (multi-size: 16, 32, 48, 64, 128, 256)
+// IMPORTANT: rc.exe (Windows Resource Compiler) does NOT support PNG-in-ICO format.
+// It only supports BMP (DIB) entries. We must convert each image to BMP format:
+//   BITMAPINFOHEADER (40 bytes) + pixel data (32-bit BGRA, bottom-up) + AND mask
 const icoSizes = [16, 32, 48, 64, 128, 256]
-const icoImages = await Promise.all(icoSizes.map((s) => renderPng(s)))
-// 构造 ICO 容器(每张 PNG 内嵌为 ICO 资源)
-const icoHeader = Buffer.from([0, 0, 1, 0, icoSizes.length])
+const icoBmpBlocks = []
+for (const size of icoSizes) {
+  const pngBuf = await renderPng(size)
+  const { data, info } = await sharp(pngBuf).raw().toBuffer({ resolveWithObject: true })
+  const w = info.width
+  const h = info.height
+  // BITMAPINFOHEADER (40 bytes)
+  const bih = Buffer.alloc(40)
+  bih.writeUInt32LE(40, 0)          // biSize
+  bih.writeInt32LE(w, 4)            // biWidth
+  bih.writeInt32LE(h * 2, 8)        // biHeight (doubled for ICO: image + mask)
+  bih.writeUInt16LE(1, 12)          // biPlanes
+  bih.writeUInt16LE(32, 14)         // biBitCount
+  bih.writeUInt32LE(0, 16)          // biCompression (BI_RGB)
+  bih.writeUInt32LE(0, 20)          // biSizeImage
+  bih.writeInt32LE(0, 24)           // biXPelsPerMeter
+  bih.writeInt32LE(0, 28)           // biYPelsPerMeter
+  bih.writeUInt32LE(0, 32)          // biClrUsed
+  bih.writeUInt32LE(0, 36)          // biClrImportant
+
+  // Pixel data: RGBA -> BGRA, and flip vertically (BMP is bottom-up)
+  const pixels = Buffer.alloc(w * h * 4)
+  for (let y = 0; y < h; y++) {
+    const srcRow = (h - 1 - y) * w * 4
+    const dstRow = y * w * 4
+    for (let x = 0; x < w; x++) {
+      const si = srcRow + x * 4
+      const di = dstRow + x * 4
+      pixels[di] = data[si + 2]     // B
+      pixels[di + 1] = data[si + 1] // G
+      pixels[di + 2] = data[si]     // R
+      pixels[di + 3] = data[si + 3] // A
+    }
+  }
+
+  // AND mask: 1 bit per pixel, padded to 4-byte boundaries, all 0 (opaque)
+  const maskRowSize = Math.ceil(w / 8 / 4) * 4
+  const mask = Buffer.alloc(maskRowSize * h, 0)
+
+  icoBmpBlocks.push(Buffer.concat([bih, pixels, mask]))
+}
+
+// ICO header: 6 bytes + 16 bytes per entry
+const icoHeader = Buffer.alloc(6)
+icoHeader.writeUInt16LE(0, 0)       // reserved
+icoHeader.writeUInt16LE(1, 2)       // type (1 = ICO)
+icoHeader.writeUInt16LE(icoSizes.length, 4) // count
+
 let icoOffset = 6 + 16 * icoSizes.length
 const dirEntries = []
-const pngBlocks = []
 for (let i = 0; i < icoSizes.length; i++) {
   const size = icoSizes[i]
-  const buf = icoImages[i]
-  // 宽高字段:0 表示 256
+  const buf = icoBmpBlocks[i]
   const w = size >= 256 ? 0 : size
   const h = size >= 256 ? 0 : size
-  dirEntries.push(Buffer.from([w, h, 0, 0, 1, 0, 32, 0]))
-  dirEntries.push(uint32LE(buf.length))
-  dirEntries.push(uint32LE(icoOffset))
+  const entry = Buffer.alloc(16)
+  entry.writeUInt8(w, 0)            // width
+  entry.writeUInt8(h, 1)            // height
+  entry.writeUInt8(0, 2)            // color count
+  entry.writeUInt8(0, 3)            // reserved
+  entry.writeUInt16LE(1, 4)         // planes
+  entry.writeUInt16LE(32, 6)        // bit count
+  entry.writeUInt32LE(buf.length, 8) // size
+  entry.writeUInt32LE(icoOffset, 12) // offset
+  dirEntries.push(entry)
   icoOffset += buf.length
-  pngBlocks.push(buf)
 }
-const ico = Buffer.concat([icoHeader, ...dirEntries, ...pngBlocks])
+const ico = Buffer.concat([icoHeader, ...dirEntries, ...icoBmpBlocks])
 await writeFile(join(outDir, 'icon.ico'), ico)
-console.log(`✓ icon.ico (${icoSizes.join(', ')})`)
+console.log(`✓ icon.ico (${icoSizes.join(', ')}) [BMP format]`)
 
 // Apple ICNS(多尺寸 PNG 容器)
 const icnsSizes = [16, 32, 64, 128, 256, 512]
