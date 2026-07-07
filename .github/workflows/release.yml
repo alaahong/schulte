@@ -296,44 +296,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Setup MSVC environment
-        id: msvc
-        shell: pwsh
-        run: |
-          Write-Host "--- Looking for Visual Studio ---"
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vswhere)) {
-            $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
-          }
-          $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>&1
-          if (-not $vsPath) {
-            $vsPath = & $vswhere -latest -products '*' -property installationPath 2>&1
-          }
-          if (-not $vsPath) {
-            Write-Host "::error::No Visual Studio installation found"
-            exit 1
-          }
-          $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
-          if (-not (Test-Path $vcvars)) {
-            $vcvars = Join-Path $vsPath "Common7\Tools\VsDevCmd.bat"
-          }
-          "msvc_vcvars=$vcvars" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "MSVC_VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          cmd.exe /c "`"$vcvars`" >nul & set" | ForEach-Object {
-            if ($_ -match '^([^=]+)=(.*)$') {
-              [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process')
-            }
-          }
-
-      - name: Install Rust MSVC toolchain
-        shell: pwsh
-        run: |
-          rustup show
-          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component rustfmt --component clippy
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::Failed to install MSVC toolchain"; exit 1 }
-          rustup default stable-x86_64-pc-windows-msvc
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::Failed to set default toolchain"; exit 1 }
-          rustup show
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -349,49 +313,31 @@ jobs:
         run: npm ci
 
       - name: Verify Tauri CLI
-        shell: pwsh
         run: |
           node --version
           npx tauri --version
-          rustup show
           rustc --version
-          cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && (where.exe link.exe & where.exe cl.exe)"
 
       - name: Generate Tauri icons
-        shell: pwsh
-        env:
-          MSVC_VCVARS: ${{ steps.msvc.outputs.msvc_vcvars }}
-        run: |
-          cmd.exe /c "`"$env:MSVC_VCVARS`" >nul && npm run icons:tauri"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        run: npm run icons:tauri
 
       - name: Build Tauri (Windows)
-        shell: cmd
+        shell: pwsh
         env:
-          MSVC_VCVARS: ${{ steps.msvc.outputs.msvc_vcvars }}
           CI: 'true'
         run: |
-          call "%MSVC_VCVARS%" >nul
-          if errorlevel 1 (
-            echo ::error::vcvars64.bat failed
-            exit /b 1
-          )
-          where.exe link.exe
-          where.exe cl.exe
-          set RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-msvc
-          set RUST_BACKTRACE=1
-          echo === running tauri build (msi + nsis) ===
-          call npx tauri build --bundles msi nsis > build-windows.log 2>&1
-          set BUILD_EXIT=%ERRORLEVEL%
-          echo === build exit: %BUILD_EXIT% ===
-          type build-windows.log
-          echo === bundle dir listing ===
-          if exist src-tauri\target\release\bundle (
-            dir /s /b src-tauri\target\release\bundle 2>nul
-          ) else (
-            echo NO BUNDLE DIR FOUND
-          )
-          exit /b %BUILD_EXIT%
+          echo "=== running tauri build (nsis) ==="
+          npx tauri build --bundles nsis 2>&1 | Tee-Object -FilePath build-windows.log
+          if ($LASTEXITCODE -ne 0) {
+            echo "::error::Tauri build failed with exit code $LASTEXITCODE"
+            exit 1
+          }
+          echo "=== bundle dir listing ==="
+          if (Test-Path "src-tauri/target/release/bundle") {
+            Get-ChildItem -Recurse "src-tauri/target/release/bundle" | ForEach-Object { $_.FullName }
+          } else {
+            echo "NO BUNDLE DIR FOUND"
+          }
 
       - name: Verify Windows artifacts exist
         if: always()
