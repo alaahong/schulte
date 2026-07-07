@@ -336,6 +336,8 @@ jobs:
         env:
           CI: 'true'
         run: |
+          set +e  # Disable exit-on-error: GitHub Actions bash defaults to set -e -o pipefail
+                  # which would exit immediately when tauri build fails, skipping error reporting
           echo "=== running tauri build (msi) ==="
           npx tauri build --bundles msi 2>&1 | tee build-windows.log
           BUILD_EXIT=${PIPESTATUS[0]}
