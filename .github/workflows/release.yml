@@ -322,19 +322,20 @@ jobs:
         run: npm run icons:tauri
 
       - name: Build Tauri (Windows)
-        shell: cmd
+        shell: bash
         env:
           CI: 'true'
         run: |
-          echo === running tauri build (nsis) ===
-          npx tauri build --bundles nsis --verbose > build-windows.log 2>&1
-          if errorlevel 1 (
-            echo === BUILD FAILED, showing log ===
-            type build-windows.log
-            exit /b 1
-          )
-          echo === BUILD SUCCEEDED ===
-          dir /s /b src-tauri\target\release\bundle 2>nul
+          set -o pipefail
+          echo "=== running tauri build (nsis) ==="
+          npx tauri build --bundles nsis 2>&1 | tee build-windows.log
+          echo "=== build exit code: ${PIPESTATUS[0]} ==="
+          if [ ${PIPESTATUS[0]} -ne 0 ]; then
+            echo "::error::Tauri build failed"
+            exit 1
+          fi
+          echo "=== BUILD SUCCEEDED ==="
+          find src-tauri/target/release/bundle -type f 2>/dev/null || true
 
       - name: Verify Windows artifacts exist
         if: always()
