@@ -332,80 +332,63 @@ jobs:
           echo "=== Done ==="
 
       - name: Build Tauri (Windows)
-        shell: pwsh
+        shell: cmd
         env:
           CI: 'true'
-          RUST_BACKTRACE: '1'
+          RUST_BACKTRACE: '0'
         run: |
-          # --- Set up MSVC developer environment for rc.exe (needed by tauri-winres) ---
-          # Enter-VsDevShell sets PATH, INCLUDE, LIB for THIS session only (not GITHUB_ENV),
-          # so it won't break other steps. Unlike ilammy/msvc-dev-cmd which exports to GITHUB_ENV
-          # and broke Rust build scripts, this is scoped to this pwsh session.
-          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          Write-Host "VS installation: $vsPath"
-          Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
-          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments "-arch=x64"
+          @echo on
+          setlocal enabledelayedexpansion
 
-          # Debug: verify rc.exe and key env vars
-          Write-Host "=== rc.exe ==="
-          $rcCmd = Get-Command rc.exe -ErrorAction SilentlyContinue
-          Write-Host "rc.exe: $($rcCmd.Source)"
-          Write-Host "=== INCLUDE (first 300 chars) ==="
-          if ($env:INCLUDE) { Write-Host $env:INCLUDE.Substring(0, [Math]::Min(300, $env:INCLUDE.Length)) } else { Write-Host "NOT SET" }
-          Write-Host "=== LIB (first 300 chars) ==="
-          if ($env:LIB) { Write-Host $env:LIB.Substring(0, [Math]::Min(300, $env:LIB.Length)) } else { Write-Host "NOT SET" }
-          Write-Host "=== rustc ==="
+          REM --- Set up MSVC developer environment for rc.exe (needed by tauri-winres) ---
+          REM vcvars64.bat sets PATH, INCLUDE, LIB for this cmd session.
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set VSPATH=%%i
+          echo VS installation: %VSPATH%
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat"
+
+          REM Debug: verify rc.exe and key env vars
+          echo === rc.exe ===
+          where rc.exe
+          echo === INCLUDE (first 300 chars) ===
+          echo %INCLUDE:~0,300%
+          echo === LIB (first 300 chars) ===
+          echo %LIB:~0,300%
+          echo === rustc ===
           rustc --version
 
-          # Test rc.exe with a minimal resource file
-          Write-Host "=== Testing rc.exe directly ==="
-          "" | Out-File -FilePath test-rc.rc -Encoding ascii
-          rc.exe /fo test-rc.res test-rc.rc 2>&1
-          Write-Host "rc.exe test exit code: $LASTEXITCODE"
-          if (Test-Path test-rc.res) { Write-Host "test-rc.res created OK" } else { Write-Host "test-rc.res NOT created" }
+          REM Test rc.exe with a minimal resource file
+          echo === Testing rc.exe directly ===
+          echo. > test-rc.rc
+          rc.exe /fo test-rc.res test-rc.rc
+          echo rc.exe test exit code: !ERRORLEVEL!
+          if exist test-rc.res (echo test-rc.res created OK) else (echo test-rc.res NOT created)
 
-          # --- Build with MSI -> NSIS fallback ---
-          Write-Host "=== running tauri build (msi) ==="
-          npx tauri build --bundles msi 2>&1 | Tee-Object -FilePath build-windows.log
-          $msiExit = $LASTEXITCODE
-          Write-Host "=== msi build exit code: $msiExit ==="
+          REM --- Build with MSI -> NSIS fallback ---
+          echo === running tauri build (msi) ===
+          call npx tauri build --bundles msi > build-windows.log 2>&1
+          set MSI_EXIT=!ERRORLEVEL!
+          echo === msi build exit code: !MSI_EXIT! ===
+          type build-windows.log
 
-          if ($msiExit -ne 0) {
-            Write-Host "::warning::MSI build failed, trying NSIS..."
-            npx tauri build --bundles nsis 2>&1 | Tee-Object -FilePath build-windows-nsis.log
-            $nsisExit = $LASTEXITCODE
-            Write-Host "=== nsis build exit code: $nsisExit ==="
+          if not "!MSI_EXIT!"=="0" (
+            echo ::warning::MSI build failed, trying NSIS...
+            call npx tauri build --bundles nsis > build-windows-nsis.log 2>&1
+            set NSIS_EXIT=!ERRORLEVEL!
+            echo === nsis build exit code: !NSIS_EXIT! ===
+            type build-windows-nsis.log
 
-            if ($nsisExit -ne 0) {
-              # Search for key error patterns in the log
-              Write-Host "=== Error lines from MSI log ==="
-              Select-String -Path build-windows.log -Pattern "error|RC\.EXE|panic|Failed|unwrap" -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { Write-Host "  $_" }
-              Write-Host "=== Error lines from NSIS log ==="
-              Select-String -Path build-windows-nsis.log -Pattern "error|RC\.EXE|panic|Failed|unwrap" -ErrorAction SilentlyContinue | Select-Object -First 10 | ForEach-Object { Write-Host "  $_" }
+            if not "!NSIS_EXIT!"=="0" (
+              echo === Error lines from MSI log ===
+              findstr /i /c:"error" /c:"RC.EXE" /c:"panic" /c:"Failed" /c:"unwrap" build-windows.log 2>nul
 
-              # Create annotation with last 30 lines of both logs (truncated)
-              $msiErr = (Get-Content build-windows.log -Tail 30 -ErrorAction SilentlyContinue) -join ' '
-              $nsisErr = (Get-Content build-windows-nsis.log -Tail 30 -ErrorAction SilentlyContinue) -join ' '
-              $errMsg = "MSI: $msiErr | NSIS: $nsisErr"
-              if ($errMsg.Length -gt 4500) { $errMsg = $errMsg.Substring(0, 4500) }
-              Write-Host "::error::$errMsg"
+              echo === Error lines from NSIS log ===
+              findstr /i /c:"error" /c:"RC.EXE" /c:"panic" /c:"Failed" /c:"unwrap" build-windows-nsis.log 2>nul
 
-              # Write full logs to step summary
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Windows Build Log (MSI - last 80 lines)"
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
-              Get-Content build-windows.log -Tail 80 -ErrorAction SilentlyContinue | Out-String | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ''
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Windows Build Log (NSIS - last 80 lines)"
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
-              Get-Content build-windows-nsis.log -Tail 80 -ErrorAction SilentlyContinue | Out-String | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
-
-              exit 1
-            }
-          }
-          Write-Host "=== BUILD SUCCEEDED ==="
-          Get-ChildItem -Path src-tauri/target/release/bundle -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_.FullName }
+              exit /b 1
+            )
+          )
+          echo === BUILD SUCCEEDED ===
+          dir /s /b src-tauri\target\release\bundle\*.msi src-tauri\target\release\bundle\*.exe 2>nul
 
       - name: Verify Windows artifacts exist
         if: always()
