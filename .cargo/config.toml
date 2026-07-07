@@ -1,8 +1,10 @@
-[target.x86_64-pc-windows-msvc]
-# 由于当前环境缺少 Windows SDK,改用 MinGW gcc 作为链接器
-# MinGW 是 rustup gnu 工具链自带的
-linker = "C:/Users/alaah/.rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained/x86_64-w64-mingw32-gcc.exe"
-ar = "C:/Users/alaah/.rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained/ld.exe"
+# Cargo 配置 (项目级)
+# 注意: 此文件会提交到仓库,影响 CI 和本地构建
+# 不要在此放置本地路径(如 C:/Users/...) — CI runner 上不存在这些路径
+#
+# Windows MSVC 链接器: GitHub Actions windows-latest runner 自带 Visual Studio,
+# Rust stable-x86_64-pc-windows-msvc 工具链会自动找到 link.exe,无需手动配置。
+# 如本地缺少 Windows SDK,请在 ~/.cargo/config.toml (用户级) 中配置 MinGW 链接器。
 
 [net]
 git-fetch-with-cli = true

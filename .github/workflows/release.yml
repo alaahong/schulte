@@ -4,8 +4,9 @@
 # 流程 (顺序):
 #   1. preflight        - typecheck + unit tests (代码质量门禁)
 #   2. create-release   - 抢先创建 draft Release (消除 6 个 job 并发创建 release 的竞态)
-#   3. linux / windows / macos-arm64 / macos-x64 / android / ios
+#   3. linux / windows / macos-arm64 / macos-x64 / android
 #                        并行构建,产物上传到已存在的 release
+#                      (iOS 暂时禁用: 需要 Apple Developer 证书)
 #   4. finalize         - 汇总构建状态到 Step Summary
 #
 # 关键修复:
@@ -732,6 +733,23 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          # Tauri 2.x 需要 NDK 进行 Rust -> Android 交叉编译
+          yes | sdkmanager --install "ndk;27.0.12077973" 2>/dev/null || true
+          NDK_DIR="${ANDROID_HOME}/ndk/27.0.12077973"
+          if [ ! -d "$NDK_DIR" ]; then
+            NDK_DIR=$(find "${ANDROID_HOME}/ndk" -maxdepth 1 -type d 2>/dev/null | head -1)
+          fi
+          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
+            echo "::error::Failed to install Android NDK"
+            exit 1
+          fi
+          echo "NDK installed at: $NDK_DIR"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
+          echo "NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -846,6 +864,7 @@ jobs:
   # iOS (.app 不签名,作为 zip 提供)
   # ============================================================
   ios:
+    if: false  # 暂时禁用: iOS 构建需要 Apple Developer 证书进行 codesign
     name: iOS (.app unsigned)
     needs: create-release
     runs-on: macos-14
@@ -993,7 +1012,7 @@ jobs:
   # ============================================================
   finalize:
     name: Finalize Release
-    needs: [linux, windows, macos-arm64, macos-x64, android, ios]
+    needs: [linux, windows, macos-arm64, macos-x64, android]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1012,7 +1031,7 @@ jobs:
             echo "| macOS arm64 | ${{ needs.macos-arm64.result }} |"
             echo "| macOS x64   | ${{ needs.macos-x64.result }} |"
             echo "| Android     | ${{ needs.android.result }} |"
-            echo "| iOS         | ${{ needs.ios.result }} |"
+            echo "| iOS         | disabled (needs codesign) |"
             echo ""
             echo "Release: https://github.com/${{ github.repository }}/releases/tag/${TAG}"
             echo ""
