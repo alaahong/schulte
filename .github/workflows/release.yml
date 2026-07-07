@@ -394,6 +394,28 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          # Analyze build logs and create error annotations
+          foreach ($logFile in @("build-windows.log", "build-windows-nsis.log")) {
+            if (Test-Path $logFile) {
+              $lines = Get-Content $logFile -ErrorAction SilentlyContinue
+              if ($lines) {
+                # Find error lines
+                $errorLines = $lines | Where-Object { $_ -match "error|RC\.EXE|panic|Failed|unwrap|cannot|not found" } | Select-Object -First 15
+                if ($errorLines) {
+                  $errSummary = ($errorLines -join ' ')
+                  if ($errSummary.Length -gt 4000) { $errSummary = $errSummary.Substring(0, 4000) }
+                  Write-Host "::error::$logFile errors: $errSummary"
+                }
+                # Write to step summary
+                Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## $logFile (last 80 lines)"
+                Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+                $lines | Select-Object -Last 80 | Out-String | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+                Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+                Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ''
+              }
+            }
+          }
+
           $msiDir = "src-tauri/target/release/bundle/msi"
           $nsisDir = "src-tauri/target/release/bundle/nsis"
           $msiCount = 0
