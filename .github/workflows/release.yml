@@ -322,22 +322,19 @@ jobs:
         run: npm run icons:tauri
 
       - name: Build Tauri (Windows)
-        shell: pwsh
+        shell: cmd
         env:
           CI: 'true'
         run: |
-          echo "=== running tauri build (nsis) ==="
-          npx tauri build --bundles nsis 2>&1 | Tee-Object -FilePath build-windows.log
-          if ($LASTEXITCODE -ne 0) {
-            echo "::error::Tauri build failed with exit code $LASTEXITCODE"
-            exit 1
-          }
-          echo "=== bundle dir listing ==="
-          if (Test-Path "src-tauri/target/release/bundle") {
-            Get-ChildItem -Recurse "src-tauri/target/release/bundle" | ForEach-Object { $_.FullName }
-          } else {
-            echo "NO BUNDLE DIR FOUND"
-          }
+          echo === running tauri build (nsis) ===
+          npx tauri build --bundles nsis --verbose > build-windows.log 2>&1
+          if errorlevel 1 (
+            echo === BUILD FAILED, showing log ===
+            type build-windows.log
+            exit /b 1
+          )
+          echo === BUILD SUCCEEDED ===
+          dir /s /b src-tauri\target\release\bundle 2>nul
 
       - name: Verify Windows artifacts exist
         if: always()
@@ -732,9 +729,16 @@ jobs:
           if [ ! -d "src-tauri/gen/android" ]; then
             echo "--- Running tauri android init ---"
             npx tauri android init
+            INIT_EXIT=$?
+            if [ $INIT_EXIT -ne 0 ]; then
+              echo "::error::tauri android init failed with exit code $INIT_EXIT"
+              exit 1
+            fi
           else
             echo "--- src-tauri/gen/android already exists, skipping init ---"
           fi
+          echo "--- gen/android contents ---"
+          ls -la src-tauri/gen/android/ 2>/dev/null || echo "gen/android dir not found!"
 
       - name: Build Tauri (Android APK)
         env:
@@ -742,25 +746,41 @@ jobs:
           CI: 'true'
         run: |
           set -o pipefail
-          npx tauri android build --apk 2>&1 | tee build-android.log
+          npx tauri android build --apk --verbose 2>&1 | tee build-android.log
+          BUILD_EXIT=$?
+          echo "=== Build exit code: ${BUILD_EXIT} ==="
+          if [ ${BUILD_EXIT} -ne 0 ]; then
+            echo "::error::Android build failed with exit code ${BUILD_EXIT}"
+            exit 1
+          fi
+          echo "=== Searching for APK/AAB files ==="
+          find . -not -path "*/node_modules/*" \( -name "*.apk" -o -name "*.aab" \) -type f 2>/dev/null
+          echo "=== gen/android/build tree ==="
+          find src-tauri/gen/android -name "*.apk" -o -name "*.aab" 2>/dev/null || echo "no gen/android dir"
+          echo "=== Done ==="
 
       - name: Verify Android artifacts exist
         if: always()
         run: |
-          echo "--- find APK (recursive) ---"
-          find src-tauri/gen/android -name "*.apk" 2>/dev/null
+          echo "--- broad search for APK/AAB (excluding node_modules) ---"
+          find . -not -path "*/node_modules/*" \( -name "*.apk" -o -name "*.aab" \) -type f 2>/dev/null | head -30
           echo "--- end ---"
-          # 实际产物路径(标准 Android Gradle 输出)
-          APK_FILES=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" -type f 2>/dev/null)
-          AAB_FILES=$(find src-tauri/gen/android/app/build/outputs/bundle -name "*.aab" -type f 2>/dev/null)
+          APK_FILES=$(find . -not -path "*/node_modules/*" -name "*.apk" -type f 2>/dev/null)
+          AAB_FILES=$(find . -not -path "*/node_modules/*" -name "*.aab" -type f 2>/dev/null)
           APK_COUNT=$(echo "$APK_FILES" | grep -c '\.apk$' || true)
           AAB_COUNT=$(echo "$AAB_FILES" | grep -c '\.aab$' || true)
           echo "apk count: ${APK_COUNT}, aab count: ${AAB_COUNT}"
           if [ "${APK_COUNT}" -eq 0 ] && [ "${AAB_COUNT}" -eq 0 ]; then
-            echo "::error::No Android artifacts found"
+            echo "::error::No Android artifacts found anywhere in project"
+            echo "--- listing src-tauri/gen/android if exists ---"
+            find src-tauri/gen/android -type f 2>/dev/null | head -50 || echo "no gen/android dir"
             exit 1
           fi
           echo "Android artifacts verified"
+          echo "APK files:"
+          echo "$APK_FILES"
+          echo "AAB files:"
+          echo "$AAB_FILES"
 
       - name: Upload logs (workflow)
         if: always()
@@ -777,8 +797,8 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # 用 find 把所有 apk/aab 收集成数组(find ... -print0 防止带空格路径出错)
-          mapfile -d $'\0' FILES < <(find src-tauri/gen/android/app/build/outputs \( -name '*.apk' -o -name '*.aab' \) -type f -print0 2>/dev/null)
+          # 广泛搜索 APK/AAB 文件 (排除 node_modules)
+          mapfile -d $'\0' FILES < <(find . -not -path "*/node_modules/*" \( -name '*.apk' -o -name '*.aab' \) -type f -print0 2>/dev/null)
           if [ ${#FILES[@]} -eq 0 ]; then
             echo "::error::No Android artifacts found to upload"
             exit 1
