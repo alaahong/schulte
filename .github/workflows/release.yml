@@ -299,10 +299,37 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Setup MSVC developer environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+      - name: Add Windows SDK rc.exe to PATH
+        shell: pwsh
+        run: |
+          # tauri-winres needs rc.exe (Windows Resource Compiler) to compile resource files.
+          # dtolnay/rust-toolchain installs Rust but doesn't add rc.exe to PATH.
+          # We only add rc.exe + Windows SDK include paths, without modifying the MSVC env
+          # (ilammy/msvc-dev-cmd breaks Rust compilation of proc-macro2/quote build scripts).
+          $sdkRoot = "C:\Program Files (x86)\Windows Kits\10"
+          # Find rc.exe (prefer latest SDK version)
+          $rcExe = Get-ChildItem "$sdkRoot\bin" -Directory |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName "x64\rc.exe" } |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+          if ($rcExe) {
+            $rcDir = Split-Path $rcExe -Parent
+            Write-Host "Found rc.exe at: $rcDir"
+            Add-Content -Path $env:GITHUB_PATH -Value $rcDir
+          } else {
+            Write-Host "::error::rc.exe not found in Windows SDK"
+            exit 1
+          }
+          # Set INCLUDE for rc.exe to find windows headers
+          $incDir = Get-ChildItem "$sdkRoot\Include" -Directory |
+            Sort-Object Name -Descending |
+            Select-Object -First 1
+          if ($incDir) {
+            $incPath = "$($incDir.FullName)\um;$($incDir.FullName)\shared;$($incDir.FullName)\ucrt"
+            Write-Host "Setting INCLUDE: $incPath"
+            Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$incPath"
+          }
 
       - name: Cache cargo
         uses: actions/cache@v4
