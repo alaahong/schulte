@@ -1102,27 +1102,49 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           disable-animations: true
           script: |
-            echo "=== Emulator booted, waiting for boot completion ==="
-            adb shell pm list packages | grep com.schulte || echo "App not yet installed"
+            echo "=== Emulator booted ==="
+
+            # Find the APK
+            APK_FILE=$(find . -not -path "*/node_modules/*" -name "*.apk" -type f 2>/dev/null | head -1)
+            if [ -z "$APK_FILE" ]; then
+              echo "::error::No APK found to install"
+              exit 1
+            fi
+            echo "APK to install: $APK_FILE"
 
             echo "=== Installing APK ==="
-            adb install -r "${{ steps.find-apk.outputs.apk_path }}"
+            adb install -r "$APK_FILE"
+            INSTALL_EXIT=$?
+            echo "Install exit code: $INSTALL_EXIT"
+            if [ "$INSTALL_EXIT" -ne 0 ]; then
+              echo "::error::APK installation failed"
+              exit 1
+            fi
 
             echo "=== Checking installed package ==="
-            adb shell pm list packages | grep com.schulte
+            adb shell pm list packages | grep schulte || echo "Package not found!"
 
-            echo "=== Launching app ==="
-            adb shell am start -n com.schulte.app/.MainActivity
+            echo "=== Getting launchable activity ==="
+            # Use monkey to launch - it auto-detects the launcher activity
+            adb shell monkey -p com.schulte.app -c android.intent.category.LAUNCHER 1
+            MONKEY_EXIT=$?
+            echo "Monkey launch exit code: $MONKEY_EXIT"
 
-            echo "=== Waiting for app to load (10 seconds) ==="
-            sleep 10
+            echo "=== Waiting for app to load (15 seconds) ==="
+            sleep 15
 
             echo "=== Checking if app process is running ==="
-            PID=$(adb shell pidof com.schulte.app 2>/dev/null || echo "")
+            PID=$(adb shell pidof com.schulte.app 2>/dev/null | tr -d '\r\n' || echo "")
             if [ -z "$PID" ]; then
-              echo "::error::App process not found - app may have crashed"
-              echo "=== Logcat (last 50 lines) ==="
+              echo "::warning::App process not found via pidof, trying ps grep..."
+              adb shell ps | grep schulte || echo "No schulte process in ps"
+              echo "=== Dumping window info ==="
+              adb shell dumpsys window windows 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' || true
+              echo "=== Logcat (last 100 lines, schulte filter) ==="
+              adb logcat -d | grep -i "schulte" | tail -100
+              echo "=== Full logcat (last 50 lines) ==="
               adb logcat -d | tail -50
+              echo "::error::App process not found - app may have crashed"
               exit 1
             fi
             echo "App is running with PID: $PID"
@@ -1132,7 +1154,7 @@ jobs:
             ls -la /tmp/app-screenshot.png
 
             echo "=== Checking logcat for errors ==="
-            adb logcat -d | grep -i "com.schulte" | grep -i "error\|exception\|crash\|fatal" | tail -20 || echo "No errors found in logcat"
+            adb logcat -d | grep -i "com.schulte" | grep -iE "error|exception|crash|fatal" | tail -20 || echo "No errors found in logcat"
 
             echo "=== APK verification PASSED ==="
 
