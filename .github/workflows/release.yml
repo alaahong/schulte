@@ -1008,7 +1008,7 @@ jobs:
   android-verify:
     name: Android Verify (emulator)
     needs: android
-    runs-on: ubuntu-latest
+    runs-on: macos-13
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -1051,14 +1051,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
-
-      - name: Install system dependencies for emulator
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libpulse0 libgl1 libnss3 libxkbcommon0 libxcb-xinerama0 \
-            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0
 
       - name: Generate Tauri icons
         run: npm run icons:tauri
@@ -1124,11 +1116,9 @@ jobs:
             echo "=== Checking installed package ==="
             adb shell pm list packages | grep schulte || echo "Package not found!"
 
-            echo "=== Getting launchable activity ==="
-            # Use monkey to launch - it auto-detects the launcher activity
+            echo "=== Launching app via monkey ==="
             adb shell monkey -p com.schulte.app -c android.intent.category.LAUNCHER 1
-            MONKEY_EXIT=$?
-            echo "Monkey launch exit code: $MONKEY_EXIT"
+            echo "Monkey launch exit code: $?"
 
             echo "=== Waiting for app to load (15 seconds) ==="
             sleep 15
