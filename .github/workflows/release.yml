@@ -1003,6 +1003,156 @@ jobs:
           if-no-files-found: ignore
 
   # ============================================================
+  # Android APK 验证 (模拟器安装 + 启动 + 截图)
+  # ============================================================
+  android-verify:
+    name: Android Verify (emulator)
+    needs: android
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install JS deps
+        run: npm ci
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          yes | sdkmanager --install "ndk;27.0.12077973" 2>/dev/null || true
+          NDK_DIR="${ANDROID_HOME}/ndk/27.0.12077973"
+          if [ ! -d "$NDK_DIR" ]; then
+            NDK_DIR=$(find "${ANDROID_HOME}/ndk" -maxdepth 1 -type d 2>/dev/null | head -1)
+          fi
+          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
+            echo "::error::Failed to install Android NDK"
+            exit 1
+          fi
+          echo "NDK installed at: $NDK_DIR"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
+          echo "NDK_HOME=$NDK_DIR" >> $GITHUB_ENV
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
+      - name: Install system dependencies for emulator
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libpulse0 libgl1 libnss3 libxkbcommon0 libxcb-xinerama0 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0
+
+      - name: Generate Tauri icons
+        run: npm run icons:tauri
+
+      - name: Init Android project
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+        run: |
+          if [ ! -d "src-tauri/gen/android" ]; then
+            npx tauri android init
+          fi
+
+      - name: Build Android APK (debug for emulator)
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+          CI: 'true'
+        run: |
+          npx tauri android build --apk --debug 2>&1 | tee build-android-debug.log
+          echo "=== Build exit code: $? ==="
+
+      - name: Find built APK
+        id: find-apk
+        shell: bash
+        run: |
+          APK=$(find . -not -path "*/node_modules/*" -name "*.apk" -type f 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then
+            echo "::error::No APK found"
+            exit 1
+          fi
+          echo "Found APK: $APK"
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+
+      - name: Boot Android Emulator & verify APK
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          profile: pixel_5
+          heap-size: 512M
+          ram-size: 4096M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            echo "=== Emulator booted, waiting for boot completion ==="
+            adb shell pm list packages | grep com.schulte || echo "App not yet installed"
+
+            echo "=== Installing APK ==="
+            adb install -r "${{ steps.find-apk.outputs.apk_path }}"
+
+            echo "=== Checking installed package ==="
+            adb shell pm list packages | grep com.schulte
+
+            echo "=== Launching app ==="
+            adb shell am start -n com.schulte.app/.MainActivity
+
+            echo "=== Waiting for app to load (10 seconds) ==="
+            sleep 10
+
+            echo "=== Checking if app process is running ==="
+            PID=$(adb shell pidof com.schulte.app 2>/dev/null || echo "")
+            if [ -z "$PID" ]; then
+              echo "::error::App process not found - app may have crashed"
+              echo "=== Logcat (last 50 lines) ==="
+              adb logcat -d | tail -50
+              exit 1
+            fi
+            echo "App is running with PID: $PID"
+
+            echo "=== Taking screenshot ==="
+            adb exec-out screencap -p > /tmp/app-screenshot.png
+            ls -la /tmp/app-screenshot.png
+
+            echo "=== Checking logcat for errors ==="
+            adb logcat -d | grep -i "com.schulte" | grep -i "error\|exception\|crash\|fatal" | tail -20 || echo "No errors found in logcat"
+
+            echo "=== APK verification PASSED ==="
+
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-emulator-screenshot
+          path: /tmp/app-screenshot.png
+          if-no-files-found: warn
+
+      - name: Upload logcat
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-logcat
+          path: build-android-debug.log
+          if-no-files-found: ignore
+
+  # ============================================================
   # iOS (.app 不签名,作为 zip 提供)
   # ============================================================
   ios:
@@ -1154,7 +1304,7 @@ jobs:
   # ============================================================
   finalize:
     name: Finalize Release
-    needs: [linux, windows, macos-arm64, macos-x64, android]
+    needs: [linux, windows, macos-arm64, macos-x64, android, android-verify]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1176,6 +1326,7 @@ jobs:
             echo "| macOS arm64 | ${{ needs.macos-arm64.result }} |"
             echo "| macOS x64   | ${{ needs.macos-x64.result }} |"
             echo "| Android     | ${{ needs.android.result }} |"
+            echo "| Android Verify (emulator) | ${{ needs.android-verify.result }} |"
             echo "| iOS         | disabled (needs codesign) |"
             echo ""
             echo "Release: https://github.com/${{ github.repository }}/releases/tag/${TAG}"
@@ -1187,7 +1338,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish release (if all builds succeeded)
-        if: github.ref_type == 'tag' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos-arm64.result == 'success' && needs.macos-x64.result == 'success' && needs.android.result == 'success'
+        if: github.ref_type == 'tag' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos-arm64.result == 'success' && needs.macos-x64.result == 'success' && needs.android.result == 'success' && needs.android-verify.result == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
@@ -1197,7 +1348,7 @@ jobs:
           echo "Release published: https://github.com/${{ github.repository }}/releases/tag/${TAG}"
 
       - name: Warn about failed builds
-        if: github.ref_type == 'tag' && (needs.linux.result != 'success' || needs.windows.result != 'success' || needs.macos-arm64.result != 'success' || needs.macos-x64.result != 'success' || needs.android.result != 'success')
+        if: github.ref_type == 'tag' && (needs.linux.result != 'success' || needs.windows.result != 'success' || needs.macos-arm64.result != 'success' || needs.macos-x64.result != 'success' || needs.android.result != 'success' || needs.android-verify.result != 'success')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
