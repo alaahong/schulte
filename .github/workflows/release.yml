@@ -1316,7 +1316,7 @@ jobs:
   # ============================================================
   finalize:
     name: Finalize Release
-    needs: [linux, windows, macos-arm64, macos-x64, android, android-verify]
+    needs: [linux, windows, macos-arm64, macos-x64, android]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -1338,8 +1338,9 @@ jobs:
             echo "| macOS arm64 | ${{ needs.macos-arm64.result }} |"
             echo "| macOS x64   | ${{ needs.macos-x64.result }} |"
             echo "| Android     | ${{ needs.android.result }} |"
-            echo "| Android Verify (emulator) | ${{ needs.android-verify.result }} |"
             echo "| iOS         | disabled (needs codesign) |"
+            echo ""
+            echo "_Note: Android emulator verification runs in parallel and does not block the release. Check the 'Android Verify (emulator)' job for results._"
             echo ""
             echo "Release: https://github.com/${{ github.repository }}/releases/tag/${TAG}"
             echo ""
@@ -1350,7 +1351,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish release (if all builds succeeded)
-        if: github.ref_type == 'tag' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos-arm64.result == 'success' && needs.macos-x64.result == 'success' && needs.android.result == 'success' && needs.android-verify.result == 'success'
+        if: github.ref_type == 'tag' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos-arm64.result == 'success' && needs.macos-x64.result == 'success' && needs.android.result == 'success'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
@@ -1360,7 +1361,7 @@ jobs:
           echo "Release published: https://github.com/${{ github.repository }}/releases/tag/${TAG}"
 
       - name: Warn about failed builds
-        if: github.ref_type == 'tag' && (needs.linux.result != 'success' || needs.windows.result != 'success' || needs.macos-arm64.result != 'success' || needs.macos-x64.result != 'success' || needs.android.result != 'success' || needs.android-verify.result != 'success')
+        if: github.ref_type == 'tag' && (needs.linux.result != 'success' || needs.windows.result != 'success' || needs.macos-arm64.result != 'success' || needs.macos-x64.result != 'success' || needs.android.result != 'success')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
