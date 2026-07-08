@@ -870,6 +870,77 @@ jobs:
           echo "AAB files:"
           echo "$AAB_FILES"
 
+      - name: Sign APK for installation
+        shell: bash
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_SDK_ROOT }}
+        run: |
+          set -euo pipefail
+          # Find the unsigned APK
+          UNSIGNED_APK=$(find . -not -path "*/node_modules/*" -name "*-unsigned.apk" -type f 2>/dev/null | head -1)
+          if [ -z "$UNSIGNED_APK" ]; then
+            echo "No unsigned APK found, checking for any APK..."
+            UNSIGNED_APK=$(find . -not -path "*/node_modules/*" -name "*.apk" -type f 2>/dev/null | head -1)
+            if [ -z "$UNSIGNED_APK" ]; then
+              echo "::error::No APK found to sign"
+              exit 1
+            fi
+          fi
+          echo "Found APK to sign: $UNSIGNED_APK"
+
+          # Generate a release keystore (self-signed, valid for 10000 days)
+          KEYSTORE_PATH="$HOME/schulte-release.keystore"
+          keytool -genkeypair \
+            -alias schulte \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass schulte123 \
+            -keypass schulte123 \
+            -dname "CN=Schulte App, OU=Dev, O=Schulte, L=Beijing, ST=Beijing, C=CN"
+
+          # Find zipalign and apksigner from Android SDK build-tools
+          BUILD_TOOLS_DIR=$(ls -d ${ANDROID_HOME}/build-tools/*/ 2>/dev/null | sort -V | tail -1)
+          if [ -z "$BUILD_TOOLS_DIR" ]; then
+            echo "::error::No build-tools found in Android SDK"
+            exit 1
+          fi
+          echo "Build tools dir: $BUILD_TOOLS_DIR"
+          ZIPALIGN="${BUILD_TOOLS_DIR}zipalign"
+          APKSIGNER="${BUILD_TOOLS_DIR}apksigner"
+
+          # Create signed output path
+          SIGNED_APK="${UNSIGNED_APK%-unsigned.apk}-signed.apk"
+          if [ "$SIGNED_APK" = "$UNSIGNED_APK" ]; then
+            SIGNED_APK="${UNSIGNED_APK%.apk}-signed.apk"
+          fi
+
+          # Step 1: zipalign the APK
+          echo "=== Zipaligning APK ==="
+          "$ZIPALIGN" -f 4 "$UNSIGNED_APK" "$SIGNED_APK"
+
+          # Step 2: Sign with apksigner (v1+v2+v3 for maximum compatibility)
+          echo "=== Signing APK ==="
+          "$APKSIGNER" sign \
+            --ks "$KEYSTORE_PATH" \
+            --ks-key-alias schulte \
+            --ks-pass pass:schulte123 \
+            --key-pass pass:schulte123 \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            "$SIGNED_APK"
+
+          # Step 3: Verify signature
+          echo "=== Verifying signature ==="
+          "$APKSIGNER" verify --verbose "$SIGNED_APK"
+
+          # Replace the unsigned APK with the signed one for upload
+          cp "$SIGNED_APK" "$UNSIGNED_APK"
+          echo "=== APK signed successfully: $SIGNED_APK ==="
+          ls -lh "$SIGNED_APK" "$UNSIGNED_APK"
+
       - name: Upload logs (workflow)
         if: always()
         uses: actions/upload-artifact@v4
@@ -885,16 +956,33 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # 广泛搜索 APK/AAB 文件 (排除 node_modules)
-          mapfile -d $'\0' FILES < <(find . -not -path "*/node_modules/*" \( -name '*.apk' -o -name '*.aab' \) -type f -print0 2>/dev/null)
+          # Find signed APKs first, fall back to any APK/AAB
+          mapfile -d $'\0' FILES < <(find . -not -path "*/node_modules/*" \( -name '*-signed.apk' -o -name '*.apk' -o -name '*.aab' \) -type f -print0 2>/dev/null)
           if [ ${#FILES[@]} -eq 0 ]; then
             echo "::error::No Android artifacts found to upload"
             exit 1
           fi
-          echo "Uploading ${#FILES[@]} file(s) to release ${TAG}:"
-          printf '  - %s\n' "${FILES[@]}"
+          # Deduplicate: prefer signed APKs over unsigned ones
+          declare -A SEEN
+          UNIQUE_FILES=()
+          for f in "${FILES[@]}"; do
+            base=$(basename "$f")
+            if [[ "$base" == *"-signed.apk" ]]; then
+              SEEN["$base"]=1
+              UNIQUE_FILES+=("$f")
+            elif [[ "$base" == *"-unsigned.apk" ]]; then
+              signed_base="${base%-unsigned.apk}-signed.apk"
+              if [ -z "${SEEN[$signed_base]+x}" ]; then
+                UNIQUE_FILES+=("$f")
+              fi
+            else
+              UNIQUE_FILES+=("$f")
+            fi
+          done
+          echo "Uploading ${#UNIQUE_FILES[@]} file(s) to release ${TAG}:"
+          printf '  - %s\n' "${UNIQUE_FILES[@]}"
           attempt=1
-          until gh release upload "${TAG}" "${FILES[@]}" --clobber; do
+          until gh release upload "${TAG}" "${UNIQUE_FILES[@]}" --clobber; do
             if [ "$attempt" -ge 3 ]; then
               echo "::error::gh release upload failed after 3 attempts"
               exit 1
