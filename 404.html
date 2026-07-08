@@ -1,0 +1,38 @@
+<!--
+  GitHub Pages SPA 路由 fallback
+  当用户访问 /<repo>/play/5 时,Pages 会返回 404。
+  这个文件被复制到 dist/ 后,GitHub Pages 会用它来响应 404。
+  通过将路径编码到查询字符串中,然后让 index.html 的脚本读出并跳转。
+-->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>舒尔特方格 · 注意力训练</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#0ea5e9" />
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+  <script>
+    // SPA fallback:把路径还原到 index.html
+    // GitHub Pages 404 时,URL 形如 /<repo>/play/5,
+    // 我们把它编码为 ?/<repo>/play/5,然后跳转到 index.html?/<repo>/play/5
+    (function () {
+      var pathSegmentsToKeep = 1 // 仓库名
+      var l = window.location
+      var decoded = decodeURIComponent(l.pathname)
+      // 把 l.pathname 中超过 pathSegmentsToKeep 的部分移到 search
+      var parts = decoded.replace(/^\/+/, '').split('/')
+      var keep = parts.slice(0, pathSegmentsToKeep).join('/')
+      var rest = parts.slice(pathSegmentsToKeep).join('/')
+      if (rest && !l.search) {
+        var query = '?/' + rest + (l.search || '') + (l.hash || '')
+        l.replace(l.protocol + '//' + l.host + '/' + keep + '/' + query)
+      }
+    })()
+  </script>
+</head>
+<body>
+  <div id="app">Loading…</div>
+</body>
+</html>
