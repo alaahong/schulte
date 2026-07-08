@@ -1093,6 +1093,28 @@ jobs:
             if [ "${{ github.ref_type }}" = "tag" ]; then
               gh release view "${TAG}" --json assets --jq '.assets[] | "- \(.name) (\(.size) bytes)"' 2>/dev/null || echo "_(could not fetch asset list)_"
             fi
-            echo ""
-            echo "_Release is created as draft. After all builds succeed, publish from the Releases page._"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish release (if all builds succeeded)
+        if: github.ref_type == 'tag' && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos-arm64.result == 'success' && needs.macos-x64.result == 'success' && needs.android.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          echo "All builds succeeded, publishing draft release ${TAG}..."
+          gh release edit "${TAG}" --draft=false
+          echo "Release published: https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+
+      - name: Warn about failed builds
+        if: github.ref_type == 'tag' && (needs.linux.result != 'success' || needs.windows.result != 'success' || needs.macos-arm64.result != 'success' || needs.macos-x64.result != 'success' || needs.android.result != 'success')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          echo "::warning::Some builds failed - release ${TAG} remains as draft"
+          echo "Build results:"
+          echo "  Linux: ${{ needs.linux.result }}"
+          echo "  Windows: ${{ needs.windows.result }}"
+          echo "  macOS arm64: ${{ needs.macos-arm64.result }}"
+          echo "  macOS x64: ${{ needs.macos-x64.result }}"
+          echo "  Android: ${{ needs.android.result }}"
