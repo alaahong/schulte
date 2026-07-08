@@ -445,12 +445,18 @@ jobs:
 
       - name: Upload to Release (Windows) with retry
         if: github.ref_type == 'tag' && success()
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           shopt -s nullglob
+          echo "=== Looking for Windows artifacts ==="
+          echo "msi dir:"
+          ls -la src-tauri/target/release/bundle/msi/ 2>/dev/null || echo "  (no msi dir)"
+          echo "nsis dir:"
+          ls -la src-tauri/target/release/bundle/nsis/ 2>/dev/null || echo "  (no nsis dir)"
           FILES=(
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
@@ -463,8 +469,12 @@ jobs:
           printf '  - %s\n' "${FILES[@]}"
           attempt=1
           until gh release upload "${TAG}" "${FILES[@]}" --clobber; do
+            EXIT_CODE=$?
+            echo "Upload attempt ${attempt} failed with exit code ${EXIT_CODE}"
             if [ "$attempt" -ge 3 ]; then
-              echo "::error::gh release upload failed after 3 attempts"
+              echo "::error::gh release upload failed after 3 attempts (last exit code: ${EXIT_CODE})"
+              echo "=== gh release view ==="
+              gh release view "${TAG}" 2>&1 || true
               exit 1
             fi
             attempt=$((attempt + 1))
